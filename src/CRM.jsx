@@ -350,6 +350,7 @@ function AsesorModal({ asesor, records, onClose }) {
   const [aComunidad, setAComunidad] = useState("");
   const [aCAGS, setACAGS] = useState(false);
   const [aDIC25, setADIC25] = useState(false);
+  const [selectedStudent, setSelectedStudent] = useState(null);
   const dASearch = useDebounce(aSearch, 200);
 
   const alumnosList = useMemo(() => {
@@ -359,10 +360,11 @@ function AsesorModal({ asesor, records, onClose }) {
         matricula:r.matricula, nombre:r.nombre, sesiones:0, asistencias:0,
         servicios:new Set(), ultimaFecha:null,
         escuela:r.escuela, programa:r.programa, interes:r.interes, comunidad:r.comunidad,
-        isCAGS:false, isDIC25:false, allEstatus:new Set(),
+        isCAGS:false, isDIC25:false, allEstatus:new Set(), records:[],
       };
       const s = m[r.matricula];
       s.sesiones++;
+      s.records.push(r);
       if (r.estatus === "Asistencia") s.asistencias++;
       s.servicios.add(r.servicio);
       s.allEstatus.add(r.estatus);
@@ -401,6 +403,14 @@ function AsesorModal({ asesor, records, onClose }) {
   const clearAFiltros = () => { setASearch(""); setAEscuela(""); setAEstatus(""); setAInteres(""); setAPrograma(""); setAServicio(""); setAComunidad(""); setACAGS(false); setADIC25(false); };
 
   return (
+    <>
+    {selectedStudent && (
+      <StudentModal
+        student={selectedStudent}
+        records={selectedStudent.records}
+        onClose={() => setSelectedStudent(null)}
+      />
+    )}
     <Modal onClose={onClose}>
       <div style={{ fontSize:20, fontWeight:700, marginBottom:20 }}>{asesor}</div>
       <div style={S.grid(5)}>
@@ -464,7 +474,8 @@ function AsesorModal({ asesor, records, onClose }) {
               </tr>
             </thead>
             <tbody>{alumnosFiltrados.map((a, i) => (
-              <tr key={i} style={{ borderBottom:"1px solid rgba(255,255,255,0.04)" }}
+              <tr key={i} style={{ borderBottom:"1px solid rgba(255,255,255,0.04)", cursor:"pointer" }}
+                onClick={() => setSelectedStudent(a)}
                 onMouseEnter={e => e.currentTarget.style.background="rgba(99,102,241,0.06)"}
                 onMouseLeave={e => e.currentTarget.style.background="transparent"}>
                 <td style={{ padding:"8px 10px", fontWeight:500 }}>
@@ -514,6 +525,7 @@ function AsesorModal({ asesor, records, onClose }) {
         <Bt color="#10b981" onClick={() => dlXl(alumnosFiltrados.map(a => ({ Matrícula:a.matricula, Alumno:a.nombre, Sesiones:a.sesiones, Asistencias:a.asistencias, Servicios:[...a.servicios].join(", "), CAGS:a.isCAGS?"Sí":"No", DIC25:a.isDIC25?"Sí":"No", "Última visita":fmtDate(a.ultimaFecha) })), `alumnos_${asesor}.xlsx`)}>↓ Lista alumnos</Bt>
       </div>
     </Modal>
+    </>
   );
 }
 
