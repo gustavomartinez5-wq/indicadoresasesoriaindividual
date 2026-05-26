@@ -71,6 +71,29 @@ function nMod(s) {
   return s.trim();
 }
 
+/* ═══════════════ SEARCH UTILITIES ═══════════════ */
+function norm(s) {
+  return String(s ?? "").toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "");
+}
+
+function useDebounce(value, delay = 200) {
+  const [dv, setDv] = useState(value);
+  useEffect(() => {
+    const t = setTimeout(() => setDv(value), delay);
+    return () => clearTimeout(t);
+  }, [value, delay]);
+  return dv;
+}
+
+function buildAccentRegex(q) {
+  if (!q) return null;
+  const map = { a:"[aáàäâã]", e:"[eéèëê]", i:"[iíìïî]", o:"[oóòöôõ]", u:"[uúùüû]", n:"[nñ]" };
+  try {
+    const escaped = q.toLowerCase().split("").map(c => map[c] || c.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("");
+    return new RegExp(escaped, "gi");
+  } catch { return null; }
+}
+
 /* ═══════════════ EXCEL DATE PARSING ═══════════════ */
 function parseDate(v) {
   if (!v) return null;
@@ -290,6 +313,29 @@ function ChartCard({ title, children, chartRef, filename }) {
       </div>
       {children}
     </Cd>
+  );
+}
+
+function Highlight({ text, query }) {
+  if (!query || !text) return <span>{String(text ?? "")}</span>;
+  const t = String(text);
+  const regex = buildAccentRegex(query);
+  if (!regex) return <span>{t}</span>;
+  const parts = [];
+  let lastIdx = 0, match;
+  while ((match = regex.exec(t)) !== null) {
+    if (match[0].length === 0) { lastIdx++; continue; }
+    if (match.index > lastIdx) parts.push({ t: t.slice(lastIdx, match.index), m: false });
+    parts.push({ t: match[0], m: true });
+    lastIdx = regex.lastIndex;
+  }
+  if (lastIdx < t.length) parts.push({ t: t.slice(lastIdx), m: false });
+  if (!parts.length) return <span>{t}</span>;
+  return (
+    <span>{parts.map((p, i) => p.m
+      ? <mark key={i} style={{ background:"rgba(99,102,241,0.35)", color:"#e8e9ed", borderRadius:3, padding:"0 2px" }}>{p.t}</mark>
+      : p.t
+    )}</span>
   );
 }
 
@@ -684,52 +730,105 @@ function TabPipeline({ data }) {
 }
 
 /* ═══════════════ TAB: ALUMNOS ═══════════════ */
+const PAGE_SIZE = 100;
+
 function TabAlumnos({ data }) {
   const [search, setSearch] = useState("");
   const [fAsesor, setFAsesor] = useState("");
   const [fEscuela, setFEscuela] = useState("");
   const [fEstatus, setFEstatus] = useState("");
   const [selectedStudent, setSelectedStudent] = useState(null);
+  const [sortCol, setSortCol] = useState("sesiones");
+  const [sortDir, setSortDir] = useState("desc");
+  const [page, setPage] = useState(0);
+
+  const dSearch = useDebounce(search, 200);
 
   const students = useMemo(() => {
     const m = {};
     data.forEach(r => {
-      if (!m[r.matricula]) m[r.matricula] = { matricula:r.matricula, nombre:r.nombre, records:[], servicesSet:new Set(), escuela:r.escuela, programa:r.programa, interes:r.interes, comunidad:r.comunidad, asesor:r.asesor };
+      if (!m[r.matricula]) m[r.matricula] = { matricula:r.matricula, records:[], servicesSet:new Set() };
       m[r.matricula].records.push(r);
       m[r.matricula].servicesSet.add(r.servicio);
     });
-    return Object.values(m).map(s => ({
-      ...s,
-      sesiones: s.records.length,
-      servicios: [...s.servicesSet].join(", "),
-      ultimoServicio: [...s.records].sort((a, b) => (b.fecha || 0) - (a.fecha || 0))[0]?.servicio || "—",
-      ultimoAsesor: [...s.records].sort((a, b) => (b.fecha || 0) - (a.fecha || 0))[0]?.asesor || "—"
-    }));
+    return Object.values(m).map(s => {
+      const sorted = [...s.records].sort((a, b) => (b.fecha || 0) - (a.fecha || 0));
+      const latest = sorted[0];
+      const bestNombre = sorted.find(r => r.nombre?.trim())?.nombre || "Sin nombre";
+      return {
+        matricula: s.matricula,
+        nombre: bestNombre,
+        sesiones: s.records.length,
+        servicios: [...s.servicesSet].join(", "),
+        ultimoServicio: latest?.servicio || "—",
+        ultimoAsesor: latest?.asesor || "—",
+        escuela: latest?.escuela || "—",
+        programa: latest?.programa || "—",
+        interes: latest?.interes || "—",
+        comunidad: latest?.comunidad || "—",
+        records: s.records,
+      };
+    });
   }, [data]);
 
-  const asesores = [...new Set(data.map(r => r.asesor))].sort();
-  const escuelas = [...new Set(data.map(r => r.escuela))].sort();
-  const estatuses = [...new Set(data.map(r => r.estatus))].sort();
+  const asesores = useMemo(() => [...new Set(data.map(r => r.asesor))].sort(), [data]);
+  const escuelas = useMemo(() => [...new Set(data.map(r => r.escuela))].sort(), [data]);
+  const estatuses = useMemo(() => [...new Set(data.map(r => r.estatus))].sort(), [data]);
 
   const filtered = useMemo(() => {
     let f = students;
-    if (search) {
-      const q = search.toLowerCase();
-      f = f.filter(s => s.nombre.toLowerCase().includes(q) || s.matricula.toLowerCase().includes(q) || s.programa.toLowerCase().includes(q));
+    if (dSearch) {
+      const q = norm(dSearch);
+      f = f.filter(s => norm(s.nombre).includes(q) || norm(s.matricula).includes(q) || norm(s.programa).includes(q));
     }
     if (fAsesor) f = f.filter(s => s.records.some(r => r.asesor === fAsesor));
     if (fEscuela) f = f.filter(s => s.escuela === fEscuela);
     if (fEstatus) f = f.filter(s => s.records.some(r => r.estatus === fEstatus));
-    return f.sort((a, b) => b.sesiones - a.sesiones);
-  }, [students, search, fAsesor, fEscuela, fEstatus]);
+    return [...f].sort((a, b) => {
+      let av = a[sortCol] ?? "", bv = b[sortCol] ?? "";
+      if (typeof av === "string") av = norm(av);
+      if (typeof bv === "string") bv = norm(bv);
+      if (av < bv) return sortDir === "asc" ? -1 : 1;
+      if (av > bv) return sortDir === "asc" ? 1 : -1;
+      return 0;
+    });
+  }, [students, dSearch, fAsesor, fEscuela, fEstatus, sortCol, sortDir]);
 
-  const clearFilters = () => { setSearch(""); setFAsesor(""); setFEscuela(""); setFEstatus(""); };
+  useEffect(() => setPage(0), [dSearch, fAsesor, fEscuela, fEstatus, sortCol]);
+
+  const totalPages = Math.ceil(filtered.length / PAGE_SIZE);
+  const displayed = dSearch ? filtered : filtered.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
+
+  const handleSort = (col) => {
+    if (col === sortCol) setSortDir(d => d === "asc" ? "desc" : "asc");
+    else { setSortCol(col); setSortDir("desc"); }
+  };
+
+  const clearFilters = () => { setSearch(""); setFAsesor(""); setFEscuela(""); setFEstatus(""); setPage(0); };
+
+  const dlFiltered = () => {
+    if (!filtered.length) return;
+    dlXl(filtered.map(s => ({
+      Matrícula: s.matricula, Nombre: s.nombre, Sesiones: s.sesiones,
+      "Último servicio": s.ultimoServicio, "Último asesor": s.ultimoAsesor,
+      Escuela: s.escuela, Programa: s.programa, Interés: s.interes, Comunidad: s.comunidad
+    })), "alumnos_filtrados.xlsx");
+  };
+
+  const SortTh = ({ col, label, align }) => {
+    const active = sortCol === col;
+    return (
+      <th onClick={() => handleSort(col)} style={{ textAlign:align||"left", padding:"8px 10px", fontSize:10, textTransform:"uppercase", letterSpacing:1, color:active?"#a5b4fc":"#6b6f82", fontWeight:600, whiteSpace:"nowrap", cursor:"pointer", userSelect:"none" }}>
+        {label} {active ? (sortDir === "asc" ? "↑" : "↓") : <span style={{ opacity:0.3 }}>↕</span>}
+      </th>
+    );
+  };
 
   return (
     <div>
       {selectedStudent && <StudentModal student={selectedStudent} records={selectedStudent.records} onClose={() => setSelectedStudent(null)} />}
       <div style={{ display:"flex", gap:10, marginBottom:16, flexWrap:"wrap", alignItems:"center" }}>
-        <input style={{ ...S.input, maxWidth:260 }} placeholder="Buscar nombre, matrícula, programa..." value={search} onChange={e => setSearch(e.target.value)} />
+        <input style={{ ...S.input, maxWidth:280 }} placeholder="Buscar nombre, matrícula, programa..." value={search} onChange={e => setSearch(e.target.value)} />
         <select style={S.select} value={fAsesor} onChange={e => setFAsesor(e.target.value)}>
           <option value="">Todos los asesores</option>
           {asesores.map(a => <option key={a} value={a}>{a}</option>)}
@@ -742,36 +841,59 @@ function TabAlumnos({ data }) {
           <option value="">Todos los estatus</option>
           {estatuses.map(e => <option key={e} value={e}>{e}</option>)}
         </select>
-        <Bt color="#8e92a6" onClick={clearFilters} style={{ fontSize:11 }}>Limpiar filtros</Bt>
-        <span style={{ ...S.mono, fontSize:11, color:"#6b6f82", marginLeft:"auto" }}>{filtered.length} alumnos</span>
+        <Bt color="#8e92a6" onClick={clearFilters} style={{ fontSize:11 }}>Limpiar</Bt>
+        <Bt color="#10b981" onClick={dlFiltered} style={{ fontSize:11, padding:"5px 12px" }}>↓ Excel</Bt>
+        <span style={{ ...S.mono, fontSize:11, color:"#6b6f82", marginLeft:"auto" }}>
+          {filtered.length} alumno{filtered.length !== 1 ? "s" : ""}{dSearch ? " encontrado" + (filtered.length !== 1 ? "s" : "") : ""}
+        </span>
       </div>
 
       <div style={{ overflowX:"auto" }}>
         <table style={{ width:"100%", borderCollapse:"collapse", fontSize:12 }}>
           <thead><tr style={{ borderBottom:"1px solid rgba(255,255,255,0.08)" }}>
-            {["Matrícula","Nombre","Sesiones","Servicios","Último servicio","Asesor","Escuela","Programa","Interés","Comunidad"].map(h => (
-              <th key={h} style={{ textAlign:"left", padding:"8px 10px", fontSize:10, textTransform:"uppercase", letterSpacing:1, color:"#6b6f82", fontWeight:600, whiteSpace:"nowrap" }}>{h}</th>
-            ))}
+            <SortTh col="matricula" label="Matrícula" />
+            <SortTh col="nombre" label="Nombre" />
+            <SortTh col="sesiones" label="Sesiones" align="center" />
+            <th style={{ textAlign:"left", padding:"8px 10px", fontSize:10, textTransform:"uppercase", letterSpacing:1, color:"#6b6f82", fontWeight:600, whiteSpace:"nowrap" }}>Servicios</th>
+            <SortTh col="ultimoServicio" label="Último servicio" />
+            <SortTh col="ultimoAsesor" label="Asesor" />
+            <SortTh col="escuela" label="Escuela" />
+            <SortTh col="programa" label="Programa" />
+            <SortTh col="interes" label="Interés" />
+            <SortTh col="comunidad" label="Comunidad" />
           </tr></thead>
-          <tbody>{filtered.slice(0, 100).map(s => (
+          <tbody>{displayed.map(s => (
             <tr key={s.matricula} style={{ borderBottom:"1px solid rgba(255,255,255,0.04)", cursor:"pointer" }}
               onClick={() => setSelectedStudent(s)}
               onMouseEnter={e => e.currentTarget.style.background="rgba(99,102,241,0.06)"}
               onMouseLeave={e => e.currentTarget.style.background="transparent"}>
-              <td style={{ padding:"8px 10px", ...S.mono, fontSize:11, color:"#a5b4fc" }}>{s.matricula}</td>
-              <td style={{ padding:"8px 10px", fontWeight:500 }}>{s.nombre}</td>
+              <td style={{ padding:"8px 10px", ...S.mono, fontSize:11, color:"#a5b4fc" }}><Highlight text={s.matricula} query={dSearch} /></td>
+              <td style={{ padding:"8px 10px", fontWeight:500 }}><Highlight text={s.nombre} query={dSearch} /></td>
               <td style={{ padding:"8px 10px", textAlign:"center" }}><span style={S.badge("#6366f1")}>{s.sesiones}</span></td>
               <td style={{ padding:"8px 10px", maxWidth:180, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap", fontSize:11, color:"#8e92a6" }}>{s.servicios}</td>
               <td style={{ padding:"8px 10px", fontSize:11 }}>{s.ultimoServicio}</td>
               <td style={{ padding:"8px 10px", fontSize:11 }}>{s.ultimoAsesor}</td>
               <td style={{ padding:"8px 10px", fontSize:11, color:"#8e92a6" }}>{s.escuela}</td>
-              <td style={{ padding:"8px 10px" }}><span style={S.badge("#3b82f6")}>{s.programa}</span></td>
+              <td style={{ padding:"8px 10px" }}><span style={S.badge("#3b82f6")}><Highlight text={s.programa} query={dSearch} /></span></td>
               <td style={{ padding:"8px 10px", fontSize:11, color:"#8e92a6" }}>{s.interes}</td>
               <td style={{ padding:"8px 10px", fontSize:11, color:"#8e92a6" }}>{s.comunidad}</td>
             </tr>
           ))}</tbody>
         </table>
-        {filtered.length > 100 && <div style={{ textAlign:"center", padding:16, color:"#6b6f82", fontSize:12 }}>Mostrando 100 de {filtered.length} alumnos</div>}
+
+        {dSearch && filtered.length === 0 && (
+          <div style={{ textAlign:"center", padding:40, color:"#6b6f82", fontSize:13 }}>
+            No se encontraron alumnos para <span style={{ color:"#a5b4fc" }}>"{search}"</span>
+          </div>
+        )}
+
+        {!dSearch && totalPages > 1 && (
+          <div style={{ display:"flex", justifyContent:"center", alignItems:"center", gap:10, padding:16 }}>
+            <Bt color="#6366f1" onClick={() => setPage(p => Math.max(0, p - 1))} style={{ padding:"4px 14px", fontSize:12, opacity:page===0?0.3:1, pointerEvents:page===0?"none":"auto" }}>← Ant</Bt>
+            <span style={{ ...S.mono, fontSize:12, color:"#8e92a6" }}>Página {page + 1} de {totalPages} · {filtered.length} alumnos</span>
+            <Bt color="#6366f1" onClick={() => setPage(p => Math.min(totalPages - 1, p + 1))} style={{ padding:"4px 14px", fontSize:12, opacity:page===totalPages-1?0.3:1, pointerEvents:page===totalPages-1?"none":"auto" }}>Sig →</Bt>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -783,12 +905,17 @@ function TabCustom({ data }) {
   const [chartType, setChartType] = useState("barH");
   const [filterDim, setFilterDim] = useState("");
   const [filterVal, setFilterVal] = useState("");
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
   const chartRef = useRef();
 
   const filtered = useMemo(() => {
-    if (!filterDim || !filterVal) return data;
-    return data.filter(r => r[filterDim] === filterVal);
-  }, [data, filterDim, filterVal]);
+    let f = data;
+    if (filterDim && filterVal) f = f.filter(r => r[filterDim] === filterVal);
+    if (dateFrom) { const d = new Date(dateFrom + "T00:00:00"); f = f.filter(r => r.fecha && r.fecha >= d); }
+    if (dateTo) { const d = new Date(dateTo + "T23:59:59"); f = f.filter(r => r.fecha && r.fecha <= d); }
+    return f;
+  }, [data, filterDim, filterVal, dateFrom, dateTo]);
 
   const grouped = useMemo(() => countBy(filtered, groupBy), [filtered, groupBy]);
   const total = filtered.length;
@@ -832,6 +959,19 @@ function TabCustom({ data }) {
                 <option value="">Todos</option>
                 {filterValues.map(v => <option key={v} value={v}>{v}</option>)}
               </select>
+            </div>
+          )}
+          <div>
+            <div style={{ fontSize:10, color:"#6b6f82", marginBottom:4, textTransform:"uppercase", letterSpacing:1 }}>Desde</div>
+            <input type="date" style={{ ...S.input, width:"auto" }} value={dateFrom} onChange={e => setDateFrom(e.target.value)} />
+          </div>
+          <div>
+            <div style={{ fontSize:10, color:"#6b6f82", marginBottom:4, textTransform:"uppercase", letterSpacing:1 }}>Hasta</div>
+            <input type="date" style={{ ...S.input, width:"auto" }} value={dateTo} onChange={e => setDateTo(e.target.value)} />
+          </div>
+          {(dateFrom || dateTo) && (
+            <div style={{ alignSelf:"flex-end" }}>
+              <Bt color="#ef4444" onClick={() => { setDateFrom(""); setDateTo(""); }} style={{ fontSize:11, padding:"8px 12px" }}>✕ Fechas</Bt>
             </div>
           )}
         </div>
