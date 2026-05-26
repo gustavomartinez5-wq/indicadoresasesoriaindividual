@@ -160,6 +160,8 @@ function parseExcel(file) {
           comunidad: col(["comunidad"]),
           campus: col(["campus"]),
           semestre: col(["semestre"]),
+          cag:     col(["cag"]),
+          exatec:  col(["exatec"]),
         };
         const data = [];
         for (let i = headerIdx + 1; i < raw.length; i++) {
@@ -188,6 +190,8 @@ function parseExcel(file) {
             comunidad: get("comunidad") || "Sin comunidad",
             campus: get("campus") || "Sin campus",
             semestre: get("semestre") || "Sin semestre",
+            isCAGS: norm(get("semestre")).startsWith("8") || norm(get("cag")).startsWith("s"),
+            isDIC25: norm(get("exatec")).includes("diciembre") && get("exatec").includes("2025"),
           });
         }
         if (data.length === 0) reject("No se encontraron registros válidos");
@@ -379,6 +383,8 @@ function StudentModal({ student, records, onClose }) {
           <span style={S.badge("#10b981")}>{student.programa}</span>
           {student.comunidad && student.comunidad !== "Sin comunidad" && <span style={S.badge("#f59e0b")}>{student.comunidad}</span>}
           {student.interes && student.interes !== "Sin interés" && <span style={S.badge("#ec4899")}>{student.interes}</span>}
+          {student.isCAGS  && <span style={{ ...S.badge("#a855f7"), fontWeight:700 }}>★ CAGS JUN26</span>}
+          {student.isDIC25 && <span style={{ ...S.badge("#22d3ee"), fontWeight:700 }}>✓ DIC25</span>}
         </div>
       </div>
       <div style={S.grid(4)}>
@@ -423,17 +429,64 @@ function AsesorModal({ asesor, records, onClose }) {
   const chartRef1 = useRef(), chartRef2 = useRef();
   const base = records.length - express;
 
+  const [aSearch, setASearch] = useState("");
+  const [aEscuela, setAEscuela] = useState("");
+  const [aEstatus, setAEstatus] = useState("");
+  const [aInteres, setAInteres] = useState("");
+  const [aPrograma, setAPrograma] = useState("");
+  const [aServicio, setAServicio] = useState("");
+  const [aComunidad, setAComunidad] = useState("");
+  const [aCAGS, setACAGS] = useState(false);
+  const [aDIC25, setADIC25] = useState(false);
+  const dASearch = useDebounce(aSearch, 200);
+
   const alumnosList = useMemo(() => {
     const m = {};
     records.forEach(r => {
-      if (!m[r.matricula]) m[r.matricula] = { matricula:r.matricula, nombre:r.nombre, sesiones:0, asistencias:0, servicios:new Set(), ultimaFecha:null };
-      m[r.matricula].sesiones++;
-      if (r.estatus === "Asistencia") m[r.matricula].asistencias++;
-      m[r.matricula].servicios.add(r.servicio);
-      if (!m[r.matricula].ultimaFecha || (r.fecha && r.fecha > m[r.matricula].ultimaFecha)) m[r.matricula].ultimaFecha = r.fecha;
+      if (!m[r.matricula]) m[r.matricula] = {
+        matricula:r.matricula, nombre:r.nombre, sesiones:0, asistencias:0,
+        servicios:new Set(), ultimaFecha:null,
+        escuela:r.escuela, programa:r.programa, interes:r.interes, comunidad:r.comunidad,
+        isCAGS:false, isDIC25:false, allEstatus:new Set(),
+      };
+      const s = m[r.matricula];
+      s.sesiones++;
+      if (r.estatus === "Asistencia") s.asistencias++;
+      s.servicios.add(r.servicio);
+      s.allEstatus.add(r.estatus);
+      if (r.isCAGS) s.isCAGS = true;
+      if (r.isDIC25) s.isDIC25 = true;
+      if (!s.ultimaFecha || (r.fecha && r.fecha > s.ultimaFecha)) {
+        s.ultimaFecha = r.fecha;
+        s.escuela = r.escuela; s.programa = r.programa;
+        s.interes = r.interes; s.comunidad = r.comunidad;
+      }
     });
     return Object.values(m).sort((a, b) => b.sesiones - a.sesiones);
   }, [records]);
+
+  const aEscuelas   = useMemo(() => [...new Set(alumnosList.map(s => s.escuela))].sort(),   [alumnosList]);
+  const aEstatuses  = useMemo(() => [...new Set(records.map(r => r.estatus))].sort(),        [records]);
+  const aIntereses  = useMemo(() => [...new Set(alumnosList.map(s => s.interes))].sort(),   [alumnosList]);
+  const aProgramas  = useMemo(() => [...new Set(alumnosList.map(s => s.programa))].sort(),  [alumnosList]);
+  const aServicios  = useMemo(() => [...new Set(records.map(r => r.servicio))].sort(),       [records]);
+  const aComunidades = useMemo(() => [...new Set(alumnosList.map(s => s.comunidad))].sort(), [alumnosList]);
+
+  const alumnosFiltrados = useMemo(() => {
+    let f = alumnosList;
+    if (dASearch) { const q = norm(dASearch); f = f.filter(s => norm(s.nombre).includes(q) || norm(s.matricula).includes(q)); }
+    if (aEscuela)   f = f.filter(s => s.escuela   === aEscuela);
+    if (aEstatus)   f = f.filter(s => s.allEstatus.has(aEstatus));
+    if (aInteres)   f = f.filter(s => s.interes   === aInteres);
+    if (aPrograma)  f = f.filter(s => s.programa  === aPrograma);
+    if (aServicio)  f = f.filter(s => s.servicios.has(aServicio));
+    if (aComunidad) f = f.filter(s => s.comunidad === aComunidad);
+    if (aCAGS)  f = f.filter(s => s.isCAGS);
+    if (aDIC25) f = f.filter(s => s.isDIC25);
+    return f;
+  }, [alumnosList, dASearch, aEscuela, aEstatus, aInteres, aPrograma, aServicio, aComunidad, aCAGS, aDIC25]);
+
+  const clearAFiltros = () => { setASearch(""); setAEscuela(""); setAEstatus(""); setAInteres(""); setAPrograma(""); setAServicio(""); setAComunidad(""); setACAGS(false); setADIC25(false); };
 
   return (
     <Modal onClose={onClose}>
@@ -468,8 +521,46 @@ function AsesorModal({ asesor, records, onClose }) {
         </ChartCard>
       </div>
       <div style={{ marginTop:20 }}>
-        <div style={S.h3}>Alumnos atendidos ({alumnosList.length})</div>
-        <div style={{ overflowX:"auto", maxHeight:260, overflowY:"auto" }}>
+        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:8 }}>
+          <div style={S.h3}>Alumnos atendidos ({alumnosFiltrados.length}{alumnosFiltrados.length !== alumnosList.length ? ` de ${alumnosList.length}` : ""})</div>
+        </div>
+        <div style={{ display:"flex", gap:6, flexWrap:"wrap", marginBottom:6 }}>
+          <input style={{ ...S.input, maxWidth:200, padding:"6px 10px" }} placeholder="Buscar alumno..." value={aSearch} onChange={e => setASearch(e.target.value)} />
+          <select style={{ ...S.select, fontSize:11 }} value={aEscuela} onChange={e => setAEscuela(e.target.value)}>
+            <option value="">Escuela</option>
+            {aEscuelas.map(v => <option key={v} value={v}>{v}</option>)}
+          </select>
+          <select style={{ ...S.select, fontSize:11 }} value={aEstatus} onChange={e => setAEstatus(e.target.value)}>
+            <option value="">Estatus</option>
+            {aEstatuses.map(v => <option key={v} value={v}>{v}</option>)}
+          </select>
+          <select style={{ ...S.select, fontSize:11 }} value={aInteres} onChange={e => setAInteres(e.target.value)}>
+            <option value="">Interés</option>
+            {aIntereses.map(v => <option key={v} value={v}>{v}</option>)}
+          </select>
+          <select style={{ ...S.select, fontSize:11 }} value={aPrograma} onChange={e => setAPrograma(e.target.value)}>
+            <option value="">Programa</option>
+            {aProgramas.map(v => <option key={v} value={v}>{v}</option>)}
+          </select>
+          <select style={{ ...S.select, fontSize:11 }} value={aServicio} onChange={e => setAServicio(e.target.value)}>
+            <option value="">Servicio</option>
+            {aServicios.map(v => <option key={v} value={v}>{v}</option>)}
+          </select>
+          <select style={{ ...S.select, fontSize:11 }} value={aComunidad} onChange={e => setAComunidad(e.target.value)}>
+            <option value="">Comunidad</option>
+            {aComunidades.map(v => <option key={v} value={v}>{v}</option>)}
+          </select>
+          <button onClick={() => { setACAGS(v => !v); setADIC25(false); }}
+            style={{ ...S.btn(aCAGS ? "#a855f7" : "#8e92a6"), fontSize:11, padding:"6px 10px", opacity: aDIC25 ? 0.4 : 1 }}>
+            ★ CAGS
+          </button>
+          <button onClick={() => { setADIC25(v => !v); setACAGS(false); }}
+            style={{ ...S.btn(aDIC25 ? "#22d3ee" : "#8e92a6"), fontSize:11, padding:"6px 10px", opacity: aCAGS ? 0.4 : 1 }}>
+            ✓ DIC25
+          </button>
+          <Bt color="#8e92a6" onClick={clearAFiltros} style={{ fontSize:11, padding:"6px 10px" }}>Limpiar</Bt>
+        </div>
+        <div style={{ overflowX:"auto", maxHeight:280, overflowY:"auto" }}>
           <table style={{ width:"100%", borderCollapse:"collapse", fontSize:12 }}>
             <thead style={{ position:"sticky", top:0, background:"#0f1628", zIndex:1 }}>
               <tr style={{ borderBottom:"1px solid rgba(255,255,255,0.08)" }}>
@@ -478,19 +569,26 @@ function AsesorModal({ asesor, records, onClose }) {
                 ))}
               </tr>
             </thead>
-            <tbody>{alumnosList.map((a, i) => (
+            <tbody>{alumnosFiltrados.map((a, i) => (
               <tr key={i} style={{ borderBottom:"1px solid rgba(255,255,255,0.04)" }}
                 onMouseEnter={e => e.currentTarget.style.background="rgba(99,102,241,0.06)"}
                 onMouseLeave={e => e.currentTarget.style.background="transparent"}>
-                <td style={{ padding:"8px 10px", fontWeight:500 }}>{a.nombre}</td>
-                <td style={{ padding:"8px 10px", ...S.mono, fontSize:11, color:"#a5b4fc" }}>{a.matricula}</td>
+                <td style={{ padding:"8px 10px", fontWeight:500 }}>
+                  <Highlight text={a.nombre} query={dASearch} />
+                  {a.isCAGS  && <span style={{ ...S.badge("#a855f7"), marginLeft:6, fontSize:9 }}>CAGS</span>}
+                  {a.isDIC25 && <span style={{ ...S.badge("#22d3ee"), marginLeft:6, fontSize:9 }}>DIC25</span>}
+                </td>
+                <td style={{ padding:"8px 10px", ...S.mono, fontSize:11, color:"#a5b4fc" }}><Highlight text={a.matricula} query={dASearch} /></td>
                 <td style={{ padding:"8px 10px", textAlign:"center" }}><span style={S.badge("#6366f1")}>{a.sesiones}</span></td>
                 <td style={{ padding:"8px 10px", textAlign:"center" }}><span style={S.badge("#10b981")}>{a.asistencias}</span></td>
-                <td style={{ padding:"8px 10px", fontSize:11, color:"#8e92a6", maxWidth:180, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{[...a.servicios].join(", ")}</td>
+                <td style={{ padding:"8px 10px", fontSize:11, color:"#8e92a6", maxWidth:160, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{[...a.servicios].join(", ")}</td>
                 <td style={{ padding:"8px 10px", ...S.mono, fontSize:11, color:"#6b6f82" }}>{fmtDate(a.ultimaFecha)}</td>
               </tr>
             ))}</tbody>
           </table>
+          {alumnosFiltrados.length === 0 && (
+            <div style={{ textAlign:"center", padding:24, color:"#6b6f82", fontSize:12 }}>Sin resultados con los filtros aplicados</div>
+          )}
         </div>
       </div>
 
@@ -519,7 +617,7 @@ function AsesorModal({ asesor, records, onClose }) {
       </div>
       <div style={{ marginTop:16, display:"flex", gap:10 }}>
         <Bt color="#6366f1" onClick={() => dlXl(records.map(r => ({ Fecha:fmtDate(r.fecha), Matrícula:r.matricula, Alumno:r.nombre, Servicio:r.servicio, Estatus:r.estatus, Escuela:r.escuela, Programa:r.programa, Modalidad:r.modalidad })), `asesor_${asesor}.xlsx`)}>↓ Descargar datos</Bt>
-        <Bt color="#10b981" onClick={() => dlXl(alumnosList.map(a => ({ Matrícula:a.matricula, Alumno:a.nombre, Sesiones:a.sesiones, Asistencias:a.asistencias, Servicios:[...a.servicios].join(", "), "Última visita":fmtDate(a.ultimaFecha) })), `alumnos_${asesor}.xlsx`)}>↓ Lista alumnos</Bt>
+        <Bt color="#10b981" onClick={() => dlXl(alumnosFiltrados.map(a => ({ Matrícula:a.matricula, Alumno:a.nombre, Sesiones:a.sesiones, Asistencias:a.asistencias, Servicios:[...a.servicios].join(", "), CAGS:a.isCAGS?"Sí":"No", DIC25:a.isDIC25?"Sí":"No", "Última visita":fmtDate(a.ultimaFecha) })), `alumnos_${asesor}.xlsx`)}>↓ Lista alumnos</Bt>
       </div>
     </Modal>
   );
@@ -536,6 +634,17 @@ function TabDashboard({ data }) {
   const base = total - express;
   const tasaAsist = base ? ((asist / base) * 100).toFixed(1) : 0;
   const tasaFalta = base ? ((faltas / base) * 100).toFixed(1) : 0;
+
+  const cagsUniq = useMemo(() => {
+    const seen = new Set();
+    data.forEach(r => { if (r.isCAGS) seen.add(r.matricula); });
+    return seen.size;
+  }, [data]);
+  const dic25Uniq = useMemo(() => {
+    const seen = new Set();
+    data.forEach(r => { if (r.isDIC25) seen.add(r.matricula); });
+    return seen.size;
+  }, [data]);
 
   const weekData = useMemo(() => {
     const wm = {};
@@ -578,6 +687,10 @@ function TabDashboard({ data }) {
         <KPI label="Tasa asistencia" value={`${tasaAsist}%`} color="#10b981" sub={`${asist} asistencias`} />
         <KPI label="Faltas" value={faltas} color="#ef4444" sub={`${tasaFalta}% tasa`} />
         <KPI label="Express" value={express} color="#f59e0b" />
+      </div>
+      <div style={{ ...S.grid(2), marginBottom:4 }}>
+        <KPI label="CAGS — Candidatos JUN 2026" value={cagsUniq} color="#a855f7" sub={`${uniq ? ((cagsUniq / uniq) * 100).toFixed(1) : 0}% de alumnos únicos`} />
+        <KPI label="DIC 2025 — Generación graduada" value={dic25Uniq} color="#22d3ee" sub={`${uniq ? ((dic25Uniq / uniq) * 100).toFixed(1) : 0}% de alumnos únicos`} />
       </div>
 
       <ChartCard title="Asesorías por semana" chartRef={ref1} filename="asesorias_semana.png">
@@ -669,6 +782,8 @@ function TabAsesores({ data }) {
           const b = recs.length - ex;
           const weeks = new Set(recs.map(r => r.semana));
           const color = CHART_COLORS[idx % CHART_COLORS.length];
+          const cagsCount = new Set(recs.filter(r => r.isCAGS).map(r => r.matricula)).size;
+          const dic25Count = new Set(recs.filter(r => r.isDIC25).map(r => r.matricula)).size;
           return (
             <Cd key={name} style={{ cursor:"pointer", borderLeft:`4px solid ${color}` }} >
               <div onClick={() => setSelected(name)}>
@@ -676,9 +791,13 @@ function TabAsesores({ data }) {
                   <div style={{ fontSize:16, fontWeight:700 }}>{name}</div>
                   <span style={{ ...S.mono, fontSize:22, fontWeight:700, color }}>{recs.length}</span>
                 </div>
-                <div style={{ display:"flex", gap:16, marginBottom:10, fontSize:12, color:"#8e92a6" }}>
+                <div style={{ display:"flex", gap:16, marginBottom:8, fontSize:12, color:"#8e92a6" }}>
                   <span>Asistencia: <b style={{ color:"#10b981" }}>{b ? ((a / b) * 100).toFixed(0) : 0}%</b></span>
                   <span>Prom/sem: <b style={{ color:"#f59e0b" }}>{weeks.size ? (recs.length / weeks.size).toFixed(1) : "—"}</b></span>
+                </div>
+                <div style={{ display:"flex", gap:6, marginBottom:8 }}>
+                  {cagsCount > 0 && <span style={S.badge("#a855f7")}>CAGS: {cagsCount}</span>}
+                  {dic25Count > 0 && <span style={S.badge("#22d3ee")}>DIC25: {dic25Count}</span>}
                 </div>
                 <div style={{ display:"flex", height:6, borderRadius:3, overflow:"hidden", gap:2 }}>
                   {a > 0 && <div style={{ flex:a, background:"#10b981", borderRadius:3 }} />}
@@ -784,6 +903,8 @@ function TabAlumnos({ data }) {
   const [fPrograma, setFPrograma] = useState("");
   const [fServicio, setFServicio] = useState("");
   const [fComunidad, setFComunidad] = useState("");
+  const [fCAGS, setFCAGS] = useState(false);
+  const [fDIC25, setFDIC25] = useState(false);
   const [selectedStudent, setSelectedStudent] = useState(null);
   const [sortCol, setSortCol] = useState("sesiones");
   const [sortDir, setSortDir] = useState("desc");
@@ -813,6 +934,8 @@ function TabAlumnos({ data }) {
         programa: latest?.programa || "—",
         interes: latest?.interes || "—",
         comunidad: latest?.comunidad || "—",
+        isCAGS: s.records.some(r => r.isCAGS),
+        isDIC25: s.records.some(r => r.isDIC25),
         records: s.records,
       };
     });
@@ -837,8 +960,10 @@ function TabAlumnos({ data }) {
     if (fEstatus)  f = f.filter(s => s.records.some(r => r.estatus   === fEstatus));
     if (fInteres)  f = f.filter(s => s.interes  === fInteres);
     if (fPrograma) f = f.filter(s => s.programa === fPrograma);
-    if (fServicio) f = f.filter(s => s.records.some(r => r.servicio  === fServicio));
+    if (fServicio)  f = f.filter(s => s.records.some(r => r.servicio === fServicio));
     if (fComunidad) f = f.filter(s => s.comunidad === fComunidad);
+    if (fCAGS)  f = f.filter(s => s.isCAGS);
+    if (fDIC25) f = f.filter(s => s.isDIC25);
     return [...f].sort((a, b) => {
       let av = a[sortCol] ?? "", bv = b[sortCol] ?? "";
       if (typeof av === "string") av = norm(av);
@@ -847,9 +972,9 @@ function TabAlumnos({ data }) {
       if (av > bv) return sortDir === "asc" ? 1 : -1;
       return 0;
     });
-  }, [students, dSearch, fAsesor, fEscuela, fEstatus, sortCol, sortDir]);
+  }, [students, dSearch, fAsesor, fEscuela, fEstatus, fInteres, fPrograma, fServicio, fComunidad, fCAGS, fDIC25, sortCol, sortDir]);
 
-  useEffect(() => setPage(0), [dSearch, fAsesor, fEscuela, fEstatus, fInteres, fPrograma, fServicio, fComunidad, sortCol]);
+  useEffect(() => setPage(0), [dSearch, fAsesor, fEscuela, fEstatus, fInteres, fPrograma, fServicio, fComunidad, fCAGS, fDIC25, sortCol]);
 
   const totalPages = Math.ceil(filtered.length / PAGE_SIZE);
   const displayed = dSearch ? filtered : filtered.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
@@ -859,12 +984,13 @@ function TabAlumnos({ data }) {
     else { setSortCol(col); setSortDir("desc"); }
   };
 
-  const clearFilters = () => { setSearch(""); setFAsesor(""); setFEscuela(""); setFEstatus(""); setFInteres(""); setFPrograma(""); setFServicio(""); setFComunidad(""); setPage(0); };
+  const clearFilters = () => { setSearch(""); setFAsesor(""); setFEscuela(""); setFEstatus(""); setFInteres(""); setFPrograma(""); setFServicio(""); setFComunidad(""); setFCAGS(false); setFDIC25(false); setPage(0); };
 
   const dlFiltered = () => {
     if (!filtered.length) return;
     dlXl(filtered.map(s => ({
       Matrícula: s.matricula, Nombre: s.nombre, Sesiones: s.sesiones,
+      CAGS: s.isCAGS ? "Sí" : "No", DIC25: s.isDIC25 ? "Sí" : "No",
       "Último servicio": s.ultimoServicio, "Último asesor": s.ultimoAsesor,
       Escuela: s.escuela, Programa: s.programa, Interés: s.interes, Comunidad: s.comunidad
     })), "alumnos_filtrados.xlsx");
@@ -914,6 +1040,14 @@ function TabAlumnos({ data }) {
           <option value="">Todas las comunidades</option>
           {comunidades.map(v => <option key={v} value={v}>{v}</option>)}
         </select>
+        <button onClick={() => { setFCAGS(v => !v); setFDIC25(false); }}
+          style={{ ...S.btn(fCAGS ? "#a855f7" : "#8e92a6"), fontSize:11, padding:"5px 12px", opacity: fDIC25 ? 0.4 : 1 }}>
+          ★ Solo CAGS
+        </button>
+        <button onClick={() => { setFDIC25(v => !v); setFCAGS(false); }}
+          style={{ ...S.btn(fDIC25 ? "#22d3ee" : "#8e92a6"), fontSize:11, padding:"5px 12px", opacity: fCAGS ? 0.4 : 1 }}>
+          ✓ Solo DIC25
+        </button>
         <Bt color="#8e92a6" onClick={clearFilters} style={{ fontSize:11 }}>Limpiar</Bt>
         <Bt color="#10b981" onClick={dlFiltered} style={{ fontSize:11, padding:"5px 12px" }}>↓ Excel</Bt>
         <span style={{ ...S.mono, fontSize:11, color:"#6b6f82", marginLeft:"auto" }}>
@@ -941,7 +1075,11 @@ function TabAlumnos({ data }) {
               onMouseEnter={e => e.currentTarget.style.background="rgba(99,102,241,0.06)"}
               onMouseLeave={e => e.currentTarget.style.background="transparent"}>
               <td style={{ padding:"8px 10px", ...S.mono, fontSize:11, color:"#a5b4fc" }}><Highlight text={s.matricula} query={dSearch} /></td>
-              <td style={{ padding:"8px 10px", fontWeight:500 }}><Highlight text={s.nombre} query={dSearch} /></td>
+              <td style={{ padding:"8px 10px", fontWeight:500 }}>
+                <Highlight text={s.nombre} query={dSearch} />
+                {s.isCAGS  && <span style={{ ...S.badge("#a855f7"), marginLeft:6, fontSize:9 }}>CAGS</span>}
+                {s.isDIC25 && <span style={{ ...S.badge("#22d3ee"), marginLeft:6, fontSize:9 }}>DIC25</span>}
+              </td>
               <td style={{ padding:"8px 10px", textAlign:"center" }}><span style={S.badge("#6366f1")}>{s.sesiones}</span></td>
               <td style={{ padding:"8px 10px", maxWidth:180, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap", fontSize:11, color:"#8e92a6" }}>{s.servicios}</td>
               <td style={{ padding:"8px 10px", fontSize:11 }}>{s.ultimoServicio}</td>
