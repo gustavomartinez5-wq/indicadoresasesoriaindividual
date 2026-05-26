@@ -414,6 +414,7 @@ function StudentModal({ student, records, onClose }) {
 
 function AsesorModal({ asesor, records, onClose }) {
   const asist = records.filter(r => r.estatus === "Asistencia").length;
+  const faltas = records.filter(r => r.estatus === "Falta").length;
   const express = records.filter(r => r.estatus === "Express").length;
   const weeks = new Set(records.map(r => r.semana));
   const srvData = countBy(records, "servicio").slice(0, 8);
@@ -421,14 +422,28 @@ function AsesorModal({ asesor, records, onClose }) {
   const last30 = [...records].sort((a, b) => (b.fecha || 0) - (a.fecha || 0)).slice(0, 30);
   const chartRef1 = useRef(), chartRef2 = useRef();
   const base = records.length - express;
+
+  const alumnosList = useMemo(() => {
+    const m = {};
+    records.forEach(r => {
+      if (!m[r.matricula]) m[r.matricula] = { matricula:r.matricula, nombre:r.nombre, sesiones:0, asistencias:0, servicios:new Set(), ultimaFecha:null };
+      m[r.matricula].sesiones++;
+      if (r.estatus === "Asistencia") m[r.matricula].asistencias++;
+      m[r.matricula].servicios.add(r.servicio);
+      if (!m[r.matricula].ultimaFecha || (r.fecha && r.fecha > m[r.matricula].ultimaFecha)) m[r.matricula].ultimaFecha = r.fecha;
+    });
+    return Object.values(m).sort((a, b) => b.sesiones - a.sesiones);
+  }, [records]);
+
   return (
     <Modal onClose={onClose}>
       <div style={{ fontSize:20, fontWeight:700, marginBottom:20 }}>{asesor}</div>
-      <div style={S.grid(4)}>
+      <div style={S.grid(5)}>
         <KPI label="Total" value={records.length} color="#6366f1" />
-        <KPI label="Asistencia" value={base ? `${((asist / base) * 100).toFixed(1)}%` : "—"} color="#10b981" />
+        <KPI label="Asistencias" value={asist} color="#10b981" sub={base ? `${((asist / base) * 100).toFixed(1)}% de tasa` : "—"} />
+        <KPI label="Faltas" value={faltas} color="#ef4444" sub={base ? `${((faltas / base) * 100).toFixed(1)}% de tasa` : "—"} />
         <KPI label="Prom/semana" value={weeks.size ? (records.length / weeks.size).toFixed(1) : "—"} color="#f59e0b" />
-        <KPI label="Alumnos" value={new Set(records.map(r => r.matricula)).size} color="#8b5cf6" />
+        <KPI label="Alumnos únicos" value={alumnosList.length} color="#8b5cf6" />
       </div>
       <div style={{ ...S.grid(2), marginTop:20 }}>
         <ChartCard title="Servicios" chartRef={chartRef1} filename={`${asesor}_servicios.png`}>
@@ -452,6 +467,33 @@ function AsesorModal({ asesor, records, onClose }) {
           </ResponsiveContainer></div>
         </ChartCard>
       </div>
+      <div style={{ marginTop:20 }}>
+        <div style={S.h3}>Alumnos atendidos ({alumnosList.length})</div>
+        <div style={{ overflowX:"auto", maxHeight:260, overflowY:"auto" }}>
+          <table style={{ width:"100%", borderCollapse:"collapse", fontSize:12 }}>
+            <thead style={{ position:"sticky", top:0, background:"#0f1628", zIndex:1 }}>
+              <tr style={{ borderBottom:"1px solid rgba(255,255,255,0.08)" }}>
+                {["Alumno","Matrícula","Sesiones","Asistencias","Servicios","Última visita"].map(h => (
+                  <th key={h} style={{ textAlign:"left", padding:"8px 10px", fontSize:10, textTransform:"uppercase", letterSpacing:1, color:"#6b6f82", fontWeight:600, whiteSpace:"nowrap" }}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>{alumnosList.map((a, i) => (
+              <tr key={i} style={{ borderBottom:"1px solid rgba(255,255,255,0.04)" }}
+                onMouseEnter={e => e.currentTarget.style.background="rgba(99,102,241,0.06)"}
+                onMouseLeave={e => e.currentTarget.style.background="transparent"}>
+                <td style={{ padding:"8px 10px", fontWeight:500 }}>{a.nombre}</td>
+                <td style={{ padding:"8px 10px", ...S.mono, fontSize:11, color:"#a5b4fc" }}>{a.matricula}</td>
+                <td style={{ padding:"8px 10px", textAlign:"center" }}><span style={S.badge("#6366f1")}>{a.sesiones}</span></td>
+                <td style={{ padding:"8px 10px", textAlign:"center" }}><span style={S.badge("#10b981")}>{a.asistencias}</span></td>
+                <td style={{ padding:"8px 10px", fontSize:11, color:"#8e92a6", maxWidth:180, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{[...a.servicios].join(", ")}</td>
+                <td style={{ padding:"8px 10px", ...S.mono, fontSize:11, color:"#6b6f82" }}>{fmtDate(a.ultimaFecha)}</td>
+              </tr>
+            ))}</tbody>
+          </table>
+        </div>
+      </div>
+
       <div style={{ marginTop:20 }}>
         <div style={S.h3}>Últimas 30 asesorías</div>
         <div style={{ overflowX:"auto" }}>
@@ -477,6 +519,7 @@ function AsesorModal({ asesor, records, onClose }) {
       </div>
       <div style={{ marginTop:16, display:"flex", gap:10 }}>
         <Bt color="#6366f1" onClick={() => dlXl(records.map(r => ({ Fecha:fmtDate(r.fecha), Matrícula:r.matricula, Alumno:r.nombre, Servicio:r.servicio, Estatus:r.estatus, Escuela:r.escuela, Programa:r.programa, Modalidad:r.modalidad })), `asesor_${asesor}.xlsx`)}>↓ Descargar datos</Bt>
+        <Bt color="#10b981" onClick={() => dlXl(alumnosList.map(a => ({ Matrícula:a.matricula, Alumno:a.nombre, Sesiones:a.sesiones, Asistencias:a.asistencias, Servicios:[...a.servicios].join(", "), "Última visita":fmtDate(a.ultimaFecha) })), `alumnos_${asesor}.xlsx`)}>↓ Lista alumnos</Bt>
       </div>
     </Modal>
   );
@@ -530,7 +573,7 @@ function TabDashboard({ data }) {
         <Bt color="#6366f1" onClick={dlReporte}>↓ Reporte completo</Bt>
       </div>
       <div style={S.grid(5)}>
-        <KPI label="Total asesorías" value={total.toLocaleString()} color="#6366f1" sub={`${(total / Math.max(1, uniq)).toFixed(1)} por alumno`} />
+        <KPI label="Total asesorías agendadas" value={total.toLocaleString()} color="#6366f1" sub={`${(total / Math.max(1, uniq)).toFixed(1)} por alumno`} />
         <KPI label="Alumnos únicos" value={uniq.toLocaleString()} color="#3b82f6" />
         <KPI label="Tasa asistencia" value={`${tasaAsist}%`} color="#10b981" sub={`${asist} asistencias`} />
         <KPI label="Faltas" value={faltas} color="#ef4444" sub={`${tasaFalta}% tasa`} />
@@ -737,6 +780,10 @@ function TabAlumnos({ data }) {
   const [fAsesor, setFAsesor] = useState("");
   const [fEscuela, setFEscuela] = useState("");
   const [fEstatus, setFEstatus] = useState("");
+  const [fInteres, setFInteres] = useState("");
+  const [fPrograma, setFPrograma] = useState("");
+  const [fServicio, setFServicio] = useState("");
+  const [fComunidad, setFComunidad] = useState("");
   const [selectedStudent, setSelectedStudent] = useState(null);
   const [sortCol, setSortCol] = useState("sesiones");
   const [sortDir, setSortDir] = useState("desc");
@@ -771,9 +818,13 @@ function TabAlumnos({ data }) {
     });
   }, [data]);
 
-  const asesores = useMemo(() => [...new Set(data.map(r => r.asesor))].sort(), [data]);
-  const escuelas = useMemo(() => [...new Set(data.map(r => r.escuela))].sort(), [data]);
-  const estatuses = useMemo(() => [...new Set(data.map(r => r.estatus))].sort(), [data]);
+  const asesores   = useMemo(() => [...new Set(data.map(r => r.asesor))].sort(),    [data]);
+  const escuelas   = useMemo(() => [...new Set(data.map(r => r.escuela))].sort(),   [data]);
+  const estatuses  = useMemo(() => [...new Set(data.map(r => r.estatus))].sort(),   [data]);
+  const intereses  = useMemo(() => [...new Set(data.map(r => r.interes))].sort(),   [data]);
+  const programas  = useMemo(() => [...new Set(data.map(r => r.programa))].sort(),  [data]);
+  const servicios  = useMemo(() => [...new Set(data.map(r => r.servicio))].sort(),  [data]);
+  const comunidades = useMemo(() => [...new Set(data.map(r => r.comunidad))].sort(), [data]);
 
   const filtered = useMemo(() => {
     let f = students;
@@ -781,9 +832,13 @@ function TabAlumnos({ data }) {
       const q = norm(dSearch);
       f = f.filter(s => norm(s.nombre).includes(q) || norm(s.matricula).includes(q) || norm(s.programa).includes(q));
     }
-    if (fAsesor) f = f.filter(s => s.records.some(r => r.asesor === fAsesor));
-    if (fEscuela) f = f.filter(s => s.escuela === fEscuela);
-    if (fEstatus) f = f.filter(s => s.records.some(r => r.estatus === fEstatus));
+    if (fAsesor)   f = f.filter(s => s.records.some(r => r.asesor    === fAsesor));
+    if (fEscuela)  f = f.filter(s => s.escuela  === fEscuela);
+    if (fEstatus)  f = f.filter(s => s.records.some(r => r.estatus   === fEstatus));
+    if (fInteres)  f = f.filter(s => s.interes  === fInteres);
+    if (fPrograma) f = f.filter(s => s.programa === fPrograma);
+    if (fServicio) f = f.filter(s => s.records.some(r => r.servicio  === fServicio));
+    if (fComunidad) f = f.filter(s => s.comunidad === fComunidad);
     return [...f].sort((a, b) => {
       let av = a[sortCol] ?? "", bv = b[sortCol] ?? "";
       if (typeof av === "string") av = norm(av);
@@ -794,7 +849,7 @@ function TabAlumnos({ data }) {
     });
   }, [students, dSearch, fAsesor, fEscuela, fEstatus, sortCol, sortDir]);
 
-  useEffect(() => setPage(0), [dSearch, fAsesor, fEscuela, fEstatus, sortCol]);
+  useEffect(() => setPage(0), [dSearch, fAsesor, fEscuela, fEstatus, fInteres, fPrograma, fServicio, fComunidad, sortCol]);
 
   const totalPages = Math.ceil(filtered.length / PAGE_SIZE);
   const displayed = dSearch ? filtered : filtered.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
@@ -804,7 +859,7 @@ function TabAlumnos({ data }) {
     else { setSortCol(col); setSortDir("desc"); }
   };
 
-  const clearFilters = () => { setSearch(""); setFAsesor(""); setFEscuela(""); setFEstatus(""); setPage(0); };
+  const clearFilters = () => { setSearch(""); setFAsesor(""); setFEscuela(""); setFEstatus(""); setFInteres(""); setFPrograma(""); setFServicio(""); setFComunidad(""); setPage(0); };
 
   const dlFiltered = () => {
     if (!filtered.length) return;
@@ -827,7 +882,7 @@ function TabAlumnos({ data }) {
   return (
     <div>
       {selectedStudent && <StudentModal student={selectedStudent} records={selectedStudent.records} onClose={() => setSelectedStudent(null)} />}
-      <div style={{ display:"flex", gap:10, marginBottom:16, flexWrap:"wrap", alignItems:"center" }}>
+      <div style={{ display:"flex", gap:8, marginBottom:10, flexWrap:"wrap", alignItems:"center" }}>
         <input style={{ ...S.input, maxWidth:280 }} placeholder="Buscar nombre, matrícula, programa..." value={search} onChange={e => setSearch(e.target.value)} />
         <select style={S.select} value={fAsesor} onChange={e => setFAsesor(e.target.value)}>
           <option value="">Todos los asesores</option>
@@ -840,6 +895,24 @@ function TabAlumnos({ data }) {
         <select style={S.select} value={fEstatus} onChange={e => setFEstatus(e.target.value)}>
           <option value="">Todos los estatus</option>
           {estatuses.map(e => <option key={e} value={e}>{e}</option>)}
+        </select>
+      </div>
+      <div style={{ display:"flex", gap:8, marginBottom:14, flexWrap:"wrap", alignItems:"center" }}>
+        <select style={S.select} value={fInteres} onChange={e => setFInteres(e.target.value)}>
+          <option value="">Todo interés</option>
+          {intereses.map(v => <option key={v} value={v}>{v}</option>)}
+        </select>
+        <select style={S.select} value={fPrograma} onChange={e => setFPrograma(e.target.value)}>
+          <option value="">Todos los programas</option>
+          {programas.map(v => <option key={v} value={v}>{v}</option>)}
+        </select>
+        <select style={S.select} value={fServicio} onChange={e => setFServicio(e.target.value)}>
+          <option value="">Todos los servicios</option>
+          {servicios.map(v => <option key={v} value={v}>{v}</option>)}
+        </select>
+        <select style={S.select} value={fComunidad} onChange={e => setFComunidad(e.target.value)}>
+          <option value="">Todas las comunidades</option>
+          {comunidades.map(v => <option key={v} value={v}>{v}</option>)}
         </select>
         <Bt color="#8e92a6" onClick={clearFilters} style={{ fontSize:11 }}>Limpiar</Bt>
         <Bt color="#10b981" onClick={dlFiltered} style={{ fontSize:11, padding:"5px 12px" }}>↓ Excel</Bt>
