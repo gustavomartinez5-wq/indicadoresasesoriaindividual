@@ -116,92 +116,7 @@ function fmtDate(d) {
   return d.toLocaleDateString("es-MX", { day:"2-digit", month:"short", year:"numeric" });
 }
 
-/* ═══════════════ EXCEL PARSING ═══════════════ */
-function parseExcel(file) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = (e) => {
-      try {
-        const wb = XLSX.read(e.target.result, { type:"array", cellDates:true });
-        let sheetName = wb.SheetNames.find(n => n.toLowerCase().includes("agenda")) || wb.SheetNames[0];
-        const ws = wb.Sheets[sheetName];
-        const raw = XLSX.utils.sheet_to_json(ws, { header:1, defval:"" });
-        let headerIdx = -1;
-        for (let i = 0; i < Math.min(15, raw.length); i++) {
-          const row = raw[i].map(c => String(c).toLowerCase());
-          if (row.some(c => c.includes("matrícula") || c.includes("matricula"))) {
-            headerIdx = i; break;
-          }
-        }
-        if (headerIdx === -1) { reject("No se encontró la fila de encabezado con 'Matrícula'"); return; }
-        const headers = raw[headerIdx].map(c => String(c).toLowerCase().trim());
-        const col = (keywords) => {
-          for (const kw of keywords) {
-            const idx = headers.findIndex(h => h.includes(kw));
-            if (idx !== -1) return idx;
-          }
-          return -1;
-        };
-        const colAP = col(["ap"]);
-        const colAM = headers.findIndex((h, i) => h === "am" && i > colAP);
-        const cols = {
-          dia: col(["día","dia","fecha"]),
-          matricula: col(["matrícula","matricula"]),
-          nombre: col(["nombre"]),
-          ap: colAP,
-          am: colAM !== -1 ? colAM : -1,
-          servicio: col(["servicio"]),
-          atiende: col(["atiende"]),
-          escuela: col(["escuela"]),
-          programa: col(["programa"]),
-          estatus: col(["estatus"]),
-          interes: col(["interés","interes"]),
-          modalidad: col(["modalidad"]),
-          comunidad: col(["comunidad"]),
-          campus: col(["campus"]),
-          semestre: col(["semestre"]),
-          cag:     col(["cag"]),
-          exatec:  col(["exatec"]),
-        };
-        const data = [];
-        for (let i = headerIdx + 1; i < raw.length; i++) {
-          const r = raw[i];
-          if (!r || r.length === 0) continue;
-          const get = (k) => cols[k] >= 0 ? String(r[cols[k]] ?? "").trim() : "";
-          const mat = get("matricula");
-          if (!mat) continue;
-          const nombre = get("nombre");
-          const ap = get("ap");
-          const am = get("am");
-          const fullName = [nombre, ap, am].filter(Boolean).join(" ");
-          const fecha = cols.dia >= 0 ? parseDate(r[cols.dia]) : null;
-          data.push({
-            fecha,
-            semana: weekNum(fecha),
-            matricula: mat,
-            nombre: fullName,
-            servicio: nSrv(get("servicio")),
-            asesor: get("atiende") || "Sin asesor",
-            escuela: nEsc(get("escuela")),
-            programa: get("programa") || "Sin programa",
-            estatus: get("estatus") || "Sin estatus",
-            interes: nInt(get("interes")),
-            modalidad: nMod(get("modalidad")),
-            comunidad: get("comunidad") || "Sin comunidad",
-            campus: get("campus") || "Sin campus",
-            semestre: get("semestre") || "Sin semestre",
-            isCAGS: norm(get("semestre")).startsWith("8") || norm(get("cag")).startsWith("s"),
-            isDIC25: norm(get("exatec")).includes("diciembre") && get("exatec").includes("2025"),
-          });
-        }
-        if (data.length === 0) reject("No se encontraron registros válidos");
-        else resolve(data);
-      } catch (err) { reject(err.message || "Error al procesar el archivo"); }
-    };
-    reader.onerror = () => reject("Error al leer el archivo");
-    reader.readAsArrayBuffer(file);
-  });
-}
+/* parseExcel movido a src/parseWorker.js — ver handleFile en CRM() */
 
 /* ═══════════════ UTILITIES ═══════════════ */
 function countBy(arr, key) {
@@ -1280,9 +1195,15 @@ function UploadScreen({ onData, error, loading }) {
           <input ref={inputRef} type="file" accept=".xlsx,.xls" style={{ display:"none" }} onChange={e => handleFile(e.target.files[0])} />
           <div style={{ fontSize:40, marginBottom:16, opacity:0.5 }}>📊</div>
           <div style={{ fontSize:15, fontWeight:600, marginBottom:8 }}>
-            {loading ? "Procesando..." : "Arrastra tu archivo Excel aquí"}
+            {loading ? (
+              <span style={{ display:"flex", alignItems:"center", gap:10, justifyContent:"center" }}>
+                <span style={{ display:"inline-block", width:18, height:18, border:"3px solid rgba(99,102,241,0.3)", borderTopColor:"#6366f1", borderRadius:"50%", animation:"spin 0.8s linear infinite" }} />
+                Procesando archivo…
+              </span>
+            ) : "Arrastra tu archivo Excel aquí"}
           </div>
-          <div style={{ color:"#6b6f82", fontSize:12 }}>o haz clic para seleccionar (.xlsx)</div>
+          <div style={{ color:"#6b6f82", fontSize:12 }}>{loading ? "El archivo se procesa en segundo plano" : "o haz clic para seleccionar (.xlsx)"}</div>
+          <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
         </div>
 
         {error && (
@@ -1317,13 +1238,24 @@ export default function CRM() {
     setLoading(true);
     setError(null);
     try {
-      const parsed = await parseExcel(file);
-      setData(parsed);
-      setTab("dashboard");
+      const buffer = await file.arrayBuffer();
+      const worker = new Worker(new URL("./parseWorker.js", import.meta.url), { type: "module" });
+      worker.postMessage({ buffer }, [buffer]);
+      worker.onmessage = ({ data: res }) => {
+        worker.terminate();
+        if (res.ok) { setData(res.data); setTab("dashboard"); }
+        else setError(res.error);
+        setLoading(false);
+      };
+      worker.onerror = (e) => {
+        worker.terminate();
+        setError(e.message || "Error procesando el archivo");
+        setLoading(false);
+      };
     } catch (e) {
-      setError(typeof e === "string" ? e : e.message);
+      setError(e.message || "Error leyendo el archivo");
+      setLoading(false);
     }
-    setLoading(false);
   }, []);
 
   const reset = () => { setData(null); setError(null); setTab("dashboard"); };
