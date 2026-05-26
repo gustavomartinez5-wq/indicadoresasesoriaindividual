@@ -338,10 +338,7 @@ function AsesorModal({ asesor, records, onClose }) {
   const faltas = records.filter(r => r.estatus === "Falta").length;
   const express = records.filter(r => r.estatus === "Express").length;
   const weeks = new Set(records.map(r => r.semana));
-  const srvData = countBy(records, "servicio").slice(0, 8);
-  const escData = countBy(records, "escuela").slice(0, 6);
   const last30 = [...records].sort((a, b) => (b.fecha || 0) - (a.fecha || 0)).slice(0, 30);
-  const chartRef1 = useRef(), chartRef2 = useRef();
   const base = records.length - express;
 
   const [aSearch, setASearch] = useState("");
@@ -414,26 +411,8 @@ function AsesorModal({ asesor, records, onClose }) {
         <KPI label="Alumnos únicos" value={alumnosList.length} color="#8b5cf6" />
       </div>
       <div style={{ ...S.grid(2), marginTop:20 }}>
-        <ChartCard title="Servicios" chartRef={chartRef1} filename={`${asesor}_servicios.png`}>
-          <div ref={chartRef1}><ResponsiveContainer width="100%" height={200}>
-            <BarChart data={srvData} layout="vertical" margin={{ left:90, right:20, top:5, bottom:5 }}>
-              <XAxis type="number" tick={{ fill:"#6b6f82", fontSize:10 }} />
-              <YAxis type="category" dataKey="name" tick={{ fill:"#8e92a6", fontSize:10 }} width={85} />
-              <Tooltip content={<TT />} />
-              <Bar dataKey="value" radius={[0,6,6,0]}>{srvData.map((_, i) => <Cell key={i} fill={CHART_COLORS[i % CHART_COLORS.length]} />)}</Bar>
-            </BarChart>
-          </ResponsiveContainer></div>
-        </ChartCard>
-        <ChartCard title="Escuelas" chartRef={chartRef2} filename={`${asesor}_escuelas.png`}>
-          <div ref={chartRef2}><ResponsiveContainer width="100%" height={200}>
-            <PieChart>
-              <Pie data={escData} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={70} innerRadius={30} paddingAngle={3}>
-                {escData.map((_, i) => <Cell key={i} fill={CHART_COLORS[i % CHART_COLORS.length]} />)}
-              </Pie>
-              <Tooltip content={<TT />} />
-            </PieChart>
-          </ResponsiveContainer></div>
-        </ChartCard>
+        <KPI label="CAGS atendidos" value={new Set(records.filter(r => r.isCAGS).map(r => r.matricula)).size} color="#a855f7" sub="Candidatos JUN 2026" />
+        <KPI label="DIC 2025 atendidos" value={new Set(records.filter(r => r.isDIC25).map(r => r.matricula)).size} color="#22d3ee" sub="Generación graduada" />
       </div>
       <div style={{ marginTop:20 }}>
         <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:8 }}>
