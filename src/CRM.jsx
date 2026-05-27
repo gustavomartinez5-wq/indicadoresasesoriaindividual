@@ -63,6 +63,92 @@ function isDIC25(r) {
   return norm(r.exatec || "").includes("diciembre") || norm(r.exatec || "").includes("dic");
 }
 
+/* ═══ PASTE / CLIPBOARD ═══ */
+const HEADER_MAP = {
+  "día": "dia", "dia": "dia", "fecha": "dia",
+  "hora": "hora",
+  "matrícula": "matricula", "matricula": "matricula",
+  "nombre": "nombre",
+  "ap": "ap", "apellido paterno": "ap",
+  "am": "am", "apellido materno": "am",
+  "servicio": "servicio",
+  "clave": "clave",
+  "atiende": "atiende", "asesor": "atiende",
+  "escuela": "escuela",
+  "programa": "programa",
+  "estatus": "estatus",
+  "interés asesoría": "interes_asesoria",
+  "interes asesoria": "interes_asesoria",
+  "interés asesoria": "interes_asesoria",
+  "interes asesoría": "interes_asesoria",
+  "interés aseosría": "interes_asesoria",
+  "interes aseosria": "interes_asesoria",
+  "interés aseosria": "interes_asesoria",
+  "interés": "interes_asesoria",
+  "semestre": "semestre",
+  "cag": "cag",
+  "exatec": "exatec",
+  "modalidad": "modalidad",
+  "campus": "campus",
+  "comunidad": "comunidad",
+  "celular": "celular",
+  "correo personal": "correo_personal",
+  "correo": "correo_personal",
+  "email": "correo_personal",
+  "linkedin": "linkedin",
+  "notas": "notas",
+};
+
+const DEFAULT_COL_ORDER = [
+  "dia","hora","matricula","nombre","ap","am","servicio","clave","atiende",
+  "escuela","programa","estatus","interes_asesoria","semestre","cag","exatec",
+  "modalidad","campus","comunidad","celular","correo_personal","linkedin","notas",
+];
+
+function parseClipDate(v, fmt = "mdy") {
+  if (!v || !v.trim()) return null;
+  const s = v.trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+  const parts = s.match(/^(\d{1,2})[\/-](\d{1,2})[\/-](\d{4})$/);
+  if (parts) {
+    const [, a, b, y] = parts;
+    const [m, d] = fmt === "mdy" ? [a, b] : [b, a];
+    return `${y}-${m.padStart(2, "0")}-${d.padStart(2, "0")}`;
+  }
+  return null;
+}
+
+function parsePastedTSV(text, dateFmt = "mdy") {
+  const lines = text.trim().split(/\r?\n/).filter((l) => l.trim());
+  if (!lines.length) return { hasHeaders: false, rows: [] };
+
+  const splitLine = (l) => l.split("\t").map((c) => c.trim());
+  const first = splitLine(lines[0]);
+
+  const normalizeH = (h) => norm(h).replace(/\s+/g, " ").trim();
+  const mappedHeaders = first.map((h) => HEADER_MAP[normalizeH(h)] || null);
+  const hasHeaders = mappedHeaders.filter(Boolean).length >= 2;
+
+  const dataLines = hasHeaders ? lines.slice(1) : lines;
+  const colMap = hasHeaders ? mappedHeaders : DEFAULT_COL_ORDER;
+
+  const rows = dataLines.map((line) => {
+    const cells = splitLine(line);
+    const row = {};
+    colMap.forEach((key, i) => {
+      if (!key) return;
+      const val = cells[i] ?? "";
+      if (key === "dia") row[key] = parseClipDate(val, dateFmt) || (val || null);
+      else row[key] = val;
+    });
+    if (row.servicio && !row.clave) row.clave = SERVICIO_CLAVE[row.servicio] || "";
+    if (!row.estatus) row.estatus = "Agendado";
+    return row;
+  }).filter((r) => r.matricula?.trim());
+
+  return { hasHeaders, rows };
+}
+
 /* ═══ STYLES ═══ */
 const S = {
   card: { background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 18, padding: 24, marginBottom: 16 },
@@ -398,6 +484,118 @@ function RecentSection({ data, today }) {
   );
 }
 
+/* ═══ PASTE MODAL ═══ */
+function PasteModal({ onClose, onImport }) {
+  const [text, setText] = useState("");
+  const [dateFmt, setDateFmt] = useState("dmy");
+  const [parsed, setParsed] = useState(null);
+  const [importing, setImporting] = useState(false);
+
+  useEffect(() => {
+    if (!text.trim()) { setParsed(null); return; }
+    setParsed(parsePastedTSV(text, dateFmt));
+  }, [text, dateFmt]);
+
+  const handleImport = async () => {
+    if (!parsed?.rows?.length) return;
+    setImporting(true);
+    await onImport(parsed.rows);
+    setImporting(false);
+    onClose();
+  };
+
+  const rows = parsed?.rows || [];
+
+  return (
+    <Modal onClose={onClose}>
+      <div style={{ fontSize: 18, fontWeight: 700, marginBottom: 8 }}>Pegar desde Excel</div>
+      <div style={{ color: "#8e92a6", fontSize: 13, marginBottom: 14 }}>
+        Copia tus filas desde Excel <b style={{ color: "#e8e9ed" }}>incluyendo los encabezados</b> y pégalas aquí (Ctrl+V).
+        La columna <b style={{ color: "#a5b4fc" }}>Matrícula</b> es obligatoria.
+      </div>
+
+      <textarea autoFocus
+        style={{ ...S.input, height: 130, resize: "vertical", fontFamily: "'JetBrains Mono', monospace", fontSize: 11, lineHeight: 1.6 }}
+        placeholder={"Día\tHora\tMatrícula\tNombre\tAP\tAM\tServicio...\n1/5/2026\t10:00\tA01198340\tAna Paula\tRamos\t..."}
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+      />
+
+      <div style={{ display: "flex", gap: 10, marginTop: 10, alignItems: "center" }}>
+        <span style={{ fontSize: 12, color: "#8e92a6" }}>Formato de fecha:</span>
+        {[["dmy", "D/M/AAAA"], ["mdy", "M/D/AAAA"]].map(([val, label]) => (
+          <button key={val} onClick={() => setDateFmt(val)}
+            style={{ ...S.btn(dateFmt === val ? "#6366f1" : "#4a5080"), fontSize: 11, padding: "4px 12px" }}>
+            {label}
+          </button>
+        ))}
+        {parsed && (
+          <span style={{ marginLeft: "auto", ...S.mono, fontSize: 11, color: "#6b6f82" }}>
+            {rows.length} registro{rows.length !== 1 ? "s" : ""} detectado{rows.length !== 1 ? "s" : ""}
+          </span>
+        )}
+      </div>
+
+      {parsed && rows.length > 0 && (
+        <div style={{ marginTop: 16 }}>
+          <div style={S.h3}>
+            Vista previa
+            {!parsed.hasHeaders && (
+              <span style={{ color: "#f59e0b", fontSize: 11, fontWeight: 400, marginLeft: 8 }}>
+                (sin encabezados detectados — usando orden de columnas por defecto)
+              </span>
+            )}
+          </div>
+          <div style={{ overflowX: "auto", maxHeight: 220, overflowY: "auto", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 10 }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
+              <thead>
+                <tr style={{ background: "#0a1525", position: "sticky", top: 0 }}>
+                  {["Día","Hora","Matrícula","Nombre","AP","Atiende","Servicio","Estatus"].map((h) => (
+                    <th key={h} style={{ padding: "7px 10px", textAlign: "left", color: "#6b6f82", fontSize: 10, textTransform: "uppercase", letterSpacing: 0.8, fontWeight: 600, whiteSpace: "nowrap" }}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {rows.slice(0, 15).map((r, i) => (
+                  <tr key={i} style={{ borderTop: "1px solid rgba(255,255,255,0.05)" }}>
+                    <td style={{ padding: "6px 10px", ...S.mono, fontSize: 10, color: "#6b6f82" }}>{r.dia || "—"}</td>
+                    <td style={{ padding: "6px 10px", ...S.mono }}>{r.hora || "—"}</td>
+                    <td style={{ padding: "6px 10px", ...S.mono, color: "#a5b4fc" }}>{r.matricula}</td>
+                    <td style={{ padding: "6px 10px" }}>{r.nombre || "—"}</td>
+                    <td style={{ padding: "6px 10px", color: "#8e92a6" }}>{r.ap || "—"}</td>
+                    <td style={{ padding: "6px 10px", color: "#8e92a6" }}>{r.atiende || "—"}</td>
+                    <td style={{ padding: "6px 10px", maxWidth: 160, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.servicio || "—"}</td>
+                    <td style={{ padding: "6px 10px" }}>
+                      <span style={S.badge(STATUS_COLORS[r.estatus] || "#6366f1")}>{r.estatus}</span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            {rows.length > 15 && (
+              <div style={{ padding: "8px 12px", fontSize: 11, color: "#6b6f82", textAlign: "center" }}>
+                ... y {rows.length - 15} registro{rows.length - 15 !== 1 ? "s" : ""} más
+              </div>
+            )}
+          </div>
+          <div style={{ marginTop: 14, display: "flex", gap: 10 }}>
+            <Bt color="#10b981" onClick={handleImport} disabled={importing}>
+              {importing ? "Importando..." : `✓ Importar ${rows.length} registro${rows.length !== 1 ? "s" : ""}`}
+            </Bt>
+            <Bt color="#8e92a6" onClick={onClose}>Cancelar</Bt>
+          </div>
+        </div>
+      )}
+
+      {parsed && rows.length === 0 && (
+        <div style={{ marginTop: 12, padding: "12px 16px", borderRadius: 10, fontSize: 13, background: "rgba(239,68,68,0.1)", border: "1px solid rgba(239,68,68,0.3)", color: "#ef4444" }}>
+          No se encontraron registros válidos. Asegúrate de incluir la columna <b>Matrícula</b> con datos.
+        </div>
+      )}
+    </Modal>
+  );
+}
+
 /* ═══ TAB ASESORÍAS (grid de captura) ═══ */
 const GRID_COLS = [
   { key: "dia",             label: "Día",         width: 130, type: "date" },
@@ -442,6 +640,7 @@ function TabAsesorias({ data, onRefresh }) {
   const [fEstatus, setFEstatus] = useState("");
   const [importing, setImporting] = useState(false);
   const [importMsg, setImportMsg] = useState(null);
+  const [showPaste, setShowPaste] = useState(false);
   const inputRef = useRef();
   const dSearch = useDebounce(search, 200);
 
@@ -539,6 +738,23 @@ function TabAsesorias({ data, onRefresh }) {
     }
   };
 
+  /* Paste import */
+  const handlePasteImport = async (rows) => {
+    const toInsert = rows.map((r) => {
+      const clean = { ...r };
+      Object.keys(clean).forEach((k) => { if (clean[k] === "") clean[k] = null; });
+      return clean;
+    });
+    const chunkSize = 500;
+    let inserted = 0;
+    for (let i = 0; i < toInsert.length; i += chunkSize) {
+      const { error } = await supabase.from("asesorias").insert(toInsert.slice(i, i + chunkSize));
+      if (!error) inserted += Math.min(chunkSize, toInsert.length - i);
+    }
+    setImportMsg({ type: "ok", text: `${inserted} registros pegados correctamente.` });
+    await onRefresh();
+  };
+
   /* Excel import */
   const handleImport = async (file) => {
     if (!file) return;
@@ -614,8 +830,9 @@ function TabAsesorias({ data, onRefresh }) {
         </select>
         <div style={{ marginLeft: "auto", display: "flex", gap: 8, alignItems: "center" }}>
           <span style={{ ...S.mono, fontSize: 11, color: "#6b6f82" }}>{data.length} registros</span>
+          <Bt color="#8b5cf6" onClick={() => setShowPaste(true)}>⌨ Pegar Excel</Bt>
           <label style={{ ...S.btn("#10b981"), cursor: "pointer", display: "inline-block" }}>
-            {importing ? "Importando..." : "↑ Importar Excel"}
+            {importing ? "Importando..." : "↑ Importar archivo"}
             <input ref={inputRef} type="file" accept=".xlsx,.xls" style={{ display: "none" }}
               onChange={(e) => handleImport(e.target.files[0])} disabled={importing} />
           </label>
@@ -624,6 +841,8 @@ function TabAsesorias({ data, onRefresh }) {
           </Bt>
         </div>
       </div>
+
+      {showPaste && <PasteModal onClose={() => setShowPaste(false)} onImport={handlePasteImport} />}
 
       {importMsg && (
         <div style={{ marginBottom: 12, padding: "10px 16px", borderRadius: 10, fontSize: 13,
