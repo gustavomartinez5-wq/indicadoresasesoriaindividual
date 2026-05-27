@@ -191,7 +191,7 @@ const S = {
 };
 
 /* ═══ REUSABLE ═══ */
-function Cd({ children, style }) { return <div style={{ ...S.card, ...style }}>{children}</div>; }
+function Cd({ children, style, ...rest }) { return <div style={{ ...S.card, ...style }} {...rest}>{children}</div>; }
 function Bt({ children, color, onClick, style, disabled }) {
   return (
     <button style={{ ...S.btn(color), ...style, opacity: disabled ? 0.4 : 1, pointerEvents: disabled ? "none" : "auto" }}
