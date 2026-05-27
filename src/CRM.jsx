@@ -625,6 +625,14 @@ const GRID_COLS = [
   { key: "notas",           label: "Notas",       width: 200, type: "text" },
 ];
 
+const FROZEN_COUNT = 4; // dia, hora, matricula, nombre
+const FROZEN_LEFT = (() => {
+  const map = { __del: 0 };
+  let left = 40;
+  GRID_COLS.forEach((col, i) => { if (i < FROZEN_COUNT) { map[col.key] = left; left += col.width; } });
+  return map;
+})();
+
 function emptyRow() {
   return { id: null, dia: todayISO(), hora: "", matricula: "", nombre: "", ap: "", am: "",
     servicio: "", clave: "", atiende: "", escuela: "", programa: "", estatus: "Agendado",
@@ -643,17 +651,23 @@ function TabAsesorias({ data, onRefresh }) {
   const [importing, setImporting] = useState(false);
   const [importMsg, setImportMsg] = useState(null);
   const [showPaste, setShowPaste] = useState(false);
+  const [gridPage, setGridPage] = useState(0);
+  const [hoveredRow, setHoveredRow] = useState(null);
   const inputRef = useRef();
   const dSearch = useDebounce(search, 200);
 
   useEffect(() => {
     setRows([...data, emptyRow()]);
+    setGridPage(0);
   }, [data]);
 
-  const filtered = useMemo(() => {
-    if (!dSearch && !fAsesor && !fEstatus) return rows;
-    return rows.filter((r) => {
-      if (r.id === null) return true; // always show new row
+  useEffect(() => { setGridPage(0); }, [dSearch, fAsesor, fEstatus]);
+
+  const filteredWithIdx = useMemo(() => {
+    const withIdx = rows.map((row, rowsIdx) => ({ row, rowsIdx }));
+    if (!dSearch && !fAsesor && !fEstatus) return withIdx;
+    return withIdx.filter(({ row: r }) => {
+      if (r.id === null) return true;
       const q = norm(dSearch);
       const matchSearch = !dSearch || norm(r.nombre).includes(q) || norm(r.matricula).includes(q) || norm(r.ap).includes(q);
       const matchAsesor = !fAsesor || r.atiende === fAsesor;
@@ -661,6 +675,15 @@ function TabAsesorias({ data, onRefresh }) {
       return matchSearch && matchAsesor && matchEstatus;
     });
   }, [rows, dSearch, fAsesor, fEstatus]);
+
+  const GRID_PAGE_SIZE = 150;
+  const existingItems = filteredWithIdx.filter(({ row }) => row.id !== null);
+  const newItem = filteredWithIdx.find(({ row }) => row.id === null);
+  const totalGridPages = Math.ceil(existingItems.length / GRID_PAGE_SIZE);
+  const pagedItems = [
+    ...existingItems.slice(gridPage * GRID_PAGE_SIZE, (gridPage + 1) * GRID_PAGE_SIZE),
+    ...(newItem ? [newItem] : [emptyRow()].map((row) => ({ row, rowsIdx: rows.length - 1 }))),
+  ];
 
   const updateRowLocal = (rowIdx, key, value) => {
     setRows((prev) => {
@@ -873,77 +896,105 @@ function TabAsesorias({ data, onRefresh }) {
       )}
 
       {/* Grid */}
-      <div style={{ overflowX: "auto", borderRadius: 12, border: "1px solid rgba(255,255,255,0.08)" }}>
+      <div style={{ overflowX: "auto", overflowY: "auto", maxHeight: "calc(100vh - 230px)", borderRadius: 12, border: "1px solid rgba(255,255,255,0.08)" }}>
         <table style={{ borderCollapse: "collapse", fontSize: 12, tableLayout: "fixed", minWidth: GRID_COLS.reduce((a, c) => a + c.width, 0) + 40 }}>
-          <thead style={{ position: "sticky", top: 0, zIndex: 10 }}>
-            <tr style={{ background: "#0a1525" }}>
-              <th style={{ width: 40, padding: "10px 8px", borderBottom: "1px solid rgba(255,255,255,0.1)" }} />
-              {GRID_COLS.map((col) => (
-                <th key={col.key} style={{ width: col.width, padding: "10px 10px", textAlign: "left", fontSize: 10, textTransform: "uppercase", letterSpacing: 0.8, color: "#6b6f82", fontWeight: 600, borderBottom: "1px solid rgba(255,255,255,0.1)", whiteSpace: "nowrap", overflow: "hidden" }}>
-                  {col.label}{col.required && <span style={{ color: "#ef4444" }}> *</span>}
-                </th>
-              ))}
+          <thead>
+            <tr>
+              {/* Delete col — frozen corner */}
+              <th style={{ position: "sticky", top: 0, left: 0, zIndex: 21, width: 40, padding: "10px 8px", borderBottom: "1px solid rgba(255,255,255,0.1)", background: "#0a1525" }} />
+              {GRID_COLS.map((col, colIdx) => {
+                const frozen = colIdx < FROZEN_COUNT;
+                const isLastFrozen = colIdx === FROZEN_COUNT - 1;
+                return (
+                  <th key={col.key} style={{
+                    position: "sticky", top: 0,
+                    left: frozen ? FROZEN_LEFT[col.key] : undefined,
+                    zIndex: frozen ? 20 : 10,
+                    width: col.width, padding: "10px 10px", textAlign: "left",
+                    fontSize: 10, textTransform: "uppercase", letterSpacing: 0.8,
+                    color: frozen ? "#a5b4fc" : "#6b6f82", fontWeight: 600,
+                    borderBottom: "1px solid rgba(255,255,255,0.1)",
+                    borderRight: isLastFrozen ? "2px solid rgba(99,102,241,0.3)" : undefined,
+                    whiteSpace: "nowrap", overflow: "hidden", background: "#0a1525",
+                  }}>
+                    {col.label}{col.required && <span style={{ color: "#ef4444" }}> *</span>}
+                  </th>
+                );
+              })}
             </tr>
           </thead>
           <tbody>
-            {filtered.map((row, rowIdx) => {
+            {pagedItems.map(({ row, rowsIdx }) => {
               const isNew = row.id === null;
-              const isSaving = saving.has(rowIdx);
+              const isSaving = saving.has(rowsIdx);
+              const isHov = hoveredRow === rowsIdx;
+              const frozenBg = isNew ? "#0d1424" : isHov ? "#10162e" : "#0b1120";
+              const rowBg = isNew ? "rgba(99,102,241,0.04)" : isHov ? "rgba(99,102,241,0.06)" : "transparent";
               return (
-                <tr key={row.id || `new-${rowIdx}`}
-                  style={{ background: isNew ? "rgba(99,102,241,0.04)" : "transparent", transition: "background .15s" }}
-                  onMouseEnter={(e) => { if (!isNew) e.currentTarget.style.background = "rgba(99,102,241,0.05)"; }}
-                  onMouseLeave={(e) => { if (!isNew) e.currentTarget.style.background = "transparent"; }}>
-                  {/* Delete / saving indicator */}
-                  <td style={{ padding: "4px 6px", borderBottom: "1px solid rgba(255,255,255,0.04)", textAlign: "center" }}>
+                <tr key={row.id || "new"}
+                  style={{ background: rowBg, transition: "background .1s" }}
+                  onMouseEnter={() => setHoveredRow(rowsIdx)}
+                  onMouseLeave={() => setHoveredRow(null)}>
+                  {/* Delete / saving — frozen */}
+                  <td style={{ position: "sticky", left: 0, zIndex: 2, background: frozenBg, width: 40, padding: "4px 6px", borderBottom: "1px solid rgba(255,255,255,0.04)", textAlign: "center", transition: "background .1s" }}>
                     {isSaving ? (
                       <span style={{ display: "inline-block", width: 12, height: 12, border: "2px solid rgba(99,102,241,0.3)", borderTopColor: "#6366f1", borderRadius: "50%", animation: "spin 0.8s linear infinite" }} />
                     ) : !isNew ? (
-                      <button onClick={() => deleteRow(rowIdx)} title="Eliminar"
+                      <button onClick={() => deleteRow(rowsIdx)} title="Eliminar"
                         style={{ background: "none", border: "none", color: "#6b6f82", cursor: "pointer", padding: 2, fontSize: 13, lineHeight: 1 }}
                         onMouseEnter={(e) => e.target.style.color = "#ef4444"}
-                        onMouseLeave={(e) => e.target.style.color = "#6b6f82"}>
-                        ✕
-                      </button>
+                        onMouseLeave={(e) => e.target.style.color = "#6b6f82"}>✕</button>
                     ) : (
                       <span style={{ color: "#6b6f82", fontSize: 10 }}>+</span>
                     )}
                   </td>
                   {GRID_COLS.map((col, colIdx) => {
-                    const isEditing = editCell?.rowIdx === rowIdx && editCell?.key === col.key;
+                    const frozen = colIdx < FROZEN_COUNT;
+                    const isLastFrozen = colIdx === FROZEN_COUNT - 1;
+                    const isEditing = editCell?.rowIdx === rowsIdx && editCell?.key === col.key;
                     const val = row[col.key] ?? "";
                     const isEmpty = !val;
                     return (
                       <td key={col.key}
-                        style={{ padding: "3px 4px", borderBottom: "1px solid rgba(255,255,255,0.04)", borderRight: "1px solid rgba(255,255,255,0.03)", maxWidth: col.width, overflow: "hidden" }}
-                        onClick={() => !col.readOnly && setEditCell({ rowIdx, key: col.key })}>
+                        style={{
+                          position: frozen ? "sticky" : undefined,
+                          left: frozen ? FROZEN_LEFT[col.key] : undefined,
+                          zIndex: frozen ? 2 : undefined,
+                          background: frozen ? frozenBg : undefined,
+                          transition: frozen ? "background .1s" : undefined,
+                          padding: "3px 4px",
+                          borderBottom: "1px solid rgba(255,255,255,0.04)",
+                          borderRight: isLastFrozen ? "2px solid rgba(99,102,241,0.3)" : "1px solid rgba(255,255,255,0.03)",
+                          maxWidth: col.width, overflow: "hidden",
+                        }}
+                        onClick={() => !col.readOnly && setEditCell({ rowIdx: rowsIdx, key: col.key })}>
                         {isEditing && !col.readOnly ? (
                           col.type === "select" ? (
-                            <select
-                              autoFocus
-                              value={val}
-                              onChange={(e) => { updateRowLocal(rowIdx, col.key, e.target.value); }}
-                              onBlur={() => handleCellBlur(rowIdx)}
-                              onKeyDown={(e) => handleKeyDown(e, rowIdx, colIdx)}
+                            <select autoFocus value={val}
+                              onChange={(e) => updateRowLocal(rowsIdx, col.key, e.target.value)}
+                              onBlur={() => handleCellBlur(rowsIdx)}
+                              onKeyDown={(e) => handleKeyDown(e, rowsIdx, colIdx)}
                               style={{ ...S.select, width: "100%", fontSize: 12, padding: "4px 6px", borderRadius: 6, boxSizing: "border-box" }}>
                               <option value="">—</option>
                               {col.options.map((o) => <option key={o} value={o}>{o}</option>)}
                             </select>
                           ) : (
-                            <input
-                              autoFocus
+                            <input autoFocus
                               type={col.type === "date" ? "date" : "text"}
                               value={val}
-                              onChange={(e) => updateRowLocal(rowIdx, col.key, e.target.value)}
-                              onBlur={() => handleCellBlur(rowIdx)}
-                              onKeyDown={(e) => handleKeyDown(e, rowIdx, colIdx)}
+                              onChange={(e) => updateRowLocal(rowsIdx, col.key, e.target.value)}
+                              onBlur={() => handleCellBlur(rowsIdx)}
+                              onKeyDown={(e) => handleKeyDown(e, rowsIdx, colIdx)}
                               style={{ ...S.input, fontSize: 12, padding: "4px 6px", borderRadius: 6, boxSizing: "border-box", background: "#0d1e38" }}
                             />
                           )
                         ) : (
                           <div style={{
                             padding: "5px 6px", minHeight: 28, fontSize: 12, borderRadius: 6,
-                            color: isEmpty && !isNew ? "#3a3f5a" : isEmpty && isNew ? "#4a5080" : col.key === "matricula" ? "#a5b4fc" : col.key === "estatus" ? (STATUS_COLORS[val] || "#e8e9ed") : "#e8e9ed",
+                            color: isEmpty && !isNew ? "#3a3f5a" : isEmpty && isNew ? "#4a5080"
+                              : col.key === "matricula" ? "#a5b4fc"
+                              : col.key === "estatus" ? (STATUS_COLORS[val] || "#e8e9ed")
+                              : "#e8e9ed",
                             fontFamily: col.key === "matricula" || col.key === "clave" ? "'JetBrains Mono', monospace" : "inherit",
                             cursor: col.readOnly ? "default" : "text",
                             overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
@@ -963,8 +1014,22 @@ function TabAsesorias({ data, onRefresh }) {
           </tbody>
         </table>
       </div>
+
+      {/* Paginación */}
+      {totalGridPages > 1 && (
+        <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "12px 4px" }}>
+          <Bt color="#6366f1" onClick={() => setGridPage((p) => Math.max(0, p - 1))}
+            style={{ padding: "4px 14px", fontSize: 12, opacity: gridPage === 0 ? 0.3 : 1, pointerEvents: gridPage === 0 ? "none" : "auto" }}>← Ant</Bt>
+          <span style={{ ...S.mono, fontSize: 12, color: "#8e92a6" }}>
+            Página {gridPage + 1} de {totalGridPages} · {existingItems.length} registros
+          </span>
+          <Bt color="#6366f1" onClick={() => setGridPage((p) => Math.min(totalGridPages - 1, p + 1))}
+            style={{ padding: "4px 14px", fontSize: 12, opacity: gridPage === totalGridPages - 1 ? 0.3 : 1, pointerEvents: gridPage === totalGridPages - 1 ? "none" : "auto" }}>Sig →</Bt>
+        </div>
+      )}
+
       <div style={{ marginTop: 8, color: "#6b6f82", fontSize: 11 }}>
-        Haz clic en cualquier celda para editar · Tab / Enter para avanzar · los cambios se guardan automáticamente al salir de la celda
+        Clic en celda para editar · Tab / Enter para avanzar · se guarda automáticamente al salir
       </div>
     </div>
   );
