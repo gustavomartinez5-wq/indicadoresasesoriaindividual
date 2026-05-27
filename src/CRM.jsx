@@ -6,10 +6,14 @@ import {
 } from "recharts";
 import { supabase } from "./supabaseClient";
 import {
-  ASESORES, ESCUELAS, SERVICIOS, SERVICIO_CLAVE, ESTATUSES,
+  ASESORES, SERVICIOS, SERVICIO_CLAVE, ESTATUSES,
   SEMESTRES, CAG_OPTS, EXATEC_OPTS, MODALIDADES, INTERESES,
   COMUNIDADES, STATUS_COLORS, CHART_COLORS,
 } from "./constants";
+import {
+  ESCUELAS_TEC, CARRERAS, CARRERA_ESCUELA, ESCUELA_A_KEY,
+  CARRERA_NOMBRE, ESCUELA_NOMBRE,
+} from "./carreras";
 
 /* ═══ TABS ═══ */
 const TABS = [
@@ -617,8 +621,8 @@ const GRID_COLS = [
   { key: "servicio",        label: "Servicio",    width: 200, type: "select", options: SERVICIOS.map((s) => s.label) },
   { key: "clave",           label: "Clave",       width: 70,  type: "text", readOnly: true },
   { key: "estatus",         label: "Estatus",     width: 120, type: "select", options: ESTATUSES },
-  { key: "escuela",         label: "Escuela",     width: 160, type: "select", options: ESCUELAS },
-  { key: "programa",        label: "Programa",    width: 160, type: "text" },
+  { key: "escuela",         label: "Escuela",     width: 90,  type: "select", options: ESCUELAS_TEC.map(e => e.siglas) },
+  { key: "programa",        label: "Programa",    width: 110, type: "cascade" },
   { key: "semestre",        label: "Semestre",    width: 90,  type: "select", options: SEMESTRES },
   { key: "cag",             label: "CAG",         width: 70,  type: "select", options: CAG_OPTS },
   { key: "exatec",          label: "EXATEC",      width: 180, type: "select", options: EXATEC_OPTS },
@@ -735,6 +739,7 @@ function TabAsesorias({ data, onRefresh }) {
       const row = { ...next[rowIdx] };
       row[key] = value;
       if (key === "servicio") row.clave = SERVICIO_CLAVE[value] || "";
+      if (key === "escuela") row.programa = "";
       // If only empty row and user starts filling it, prepend another blank
       if (row.id === null && key === "matricula" && value) {
         next[rowIdx] = row;
@@ -1153,7 +1158,7 @@ function TabAsesorias({ data, onRefresh }) {
                           borderRight: isLastFrozen ? "2px solid rgba(99,102,241,0.3)" : "1px solid rgba(255,255,255,0.03)",
                           maxWidth: col.width, overflow: "hidden",
                         }}
-                        onClick={() => !col.readOnly && setEditCell({ rowIdx: rowsIdx, key: col.key })}>
+                        onClick={() => !col.readOnly && !(col.type === "cascade" && !row.escuela) && setEditCell({ rowIdx: rowsIdx, key: col.key })}>
                         {isEditing && !col.readOnly ? (
                           col.type === "select" ? (
                             <select autoFocus value={val}
@@ -1164,7 +1169,26 @@ function TabAsesorias({ data, onRefresh }) {
                               <option value="">—</option>
                               {col.options.map((o) => <option key={o} value={o}>{o}</option>)}
                             </select>
-                          ) : (
+                          ) : col.type === "cascade" ? (() => {
+                            const schoolKey = ESCUELA_A_KEY[row.escuela] || null;
+                            const opts = schoolKey
+                              ? CARRERAS.filter(c => CARRERA_ESCUELA[c.siglas] === schoolKey)
+                              : [];
+                            const disabled = !schoolKey;
+                            return (
+                              <select autoFocus value={val} disabled={disabled}
+                                onChange={(e) => updateRowLocal(rowsIdx, col.key, e.target.value)}
+                                onBlur={() => handleCellBlur(rowsIdx)}
+                                onKeyDown={(e) => handleKeyDown(e, rowsIdx, colIdx)}
+                                style={{ ...S.select, width: "100%", fontSize: 12, padding: "4px 6px", borderRadius: 6, boxSizing: "border-box", opacity: disabled ? 0.45 : 1, cursor: disabled ? "not-allowed" : "pointer" }}>
+                                <option value="">{disabled ? "↑ Selecciona escuela primero" : "—"}</option>
+                                {opts.map(c => (
+                                  <option key={c.siglas} value={c.siglas}>{c.siglas}</option>
+                                ))}
+                              </select>
+                            );
+                          })()
+                          : (
                             <input autoFocus
                               type={col.type === "date" ? "date" : "text"}
                               value={val}
@@ -1175,18 +1199,29 @@ function TabAsesorias({ data, onRefresh }) {
                             />
                           )
                         ) : (
-                          <div style={{
+                          <div
+                            title={
+                              col.key === "escuela" && val ? ESCUELA_NOMBRE[ESCUELA_A_KEY[val] || val] || val
+                              : col.key === "programa" && val ? CARRERA_NOMBRE[val] || val
+                              : col.type === "cascade" && !row.escuela ? "Selecciona primero la Escuela"
+                              : undefined
+                            }
+                            style={{
                             padding: "5px 6px", minHeight: 28, fontSize: 12, borderRadius: 6,
-                            color: isEmpty && !isNew ? "#3a3f5a" : isEmpty && isNew ? "#4a5080"
+                            color: isEmpty && !isNew ? "#3a3f5a"
+                              : isEmpty && isNew && col.type === "cascade" && !row.escuela ? "#2a2f4a"
+                              : isEmpty && isNew ? "#4a5080"
                               : col.key === "matricula" ? "#a5b4fc"
                               : col.key === "estatus" ? (STATUS_COLORS[val] || "#e8e9ed")
+                              : col.key === "escuela" ? "#a5b4fc"
+                              : col.key === "programa" ? "#86efac"
                               : "#e8e9ed",
                             fontFamily: col.key === "matricula" || col.key === "clave" ? "'JetBrains Mono', monospace" : "inherit",
-                            cursor: col.readOnly ? "default" : "text",
+                            cursor: col.readOnly ? "default" : col.type === "cascade" && !row.escuela ? "not-allowed" : "text",
                             overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
                             border: "1px solid transparent",
                           }}
-                            onMouseEnter={(e) => { if (!col.readOnly) e.currentTarget.style.border = "1px solid rgba(99,102,241,0.3)"; }}
+                            onMouseEnter={(e) => { if (!col.readOnly && !(col.type === "cascade" && !row.escuela)) e.currentTarget.style.border = "1px solid rgba(99,102,241,0.3)"; }}
                             onMouseLeave={(e) => { e.currentTarget.style.border = "1px solid transparent"; }}>
                             {isEmpty ? (isNew && col.key === "matricula" ? "Nueva asesoría..." : col.placeholder || "") : val}
                           </div>
