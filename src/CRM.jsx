@@ -313,27 +313,58 @@ function StudentModal({ matricula, records, onClose }) {
 function TabHome({ data, onStatusChange }) {
   const today = todayISO();
   const [now, setNow] = useState(() => new Date());
+  const [fadingOut, setFadingOut] = useState({}); // { [id]: expiresAt ms }
+
   useEffect(() => {
     const t = setInterval(() => setNow(new Date()), 60000);
     return () => clearInterval(t);
   }, []);
 
-  const hoy = useMemo(() =>
-    data.filter((r) => r.dia === today).sort((a, b) => (a.hora || "") < (b.hora || "") ? -1 : 1),
+  // Clean up entries after their animation completes (~1.2s after expiry)
+  useEffect(() => {
+    const t = setInterval(() => {
+      const n = Date.now();
+      setFadingOut((prev) => {
+        const expired = Object.keys(prev).filter((id) => prev[id] <= n);
+        if (!expired.length) return prev;
+        const next = { ...prev };
+        expired.forEach((id) => delete next[id]);
+        return next;
+      });
+    }, 1200);
+    return () => clearInterval(t);
+  }, []);
+
+  const allHoy = useMemo(() =>
+    data.filter((r) => r.dia === today).sort((a, b) => parseHora(a.hora) - parseHora(b.hora)),
     [data, today]
   );
+
+  const visibleHoy = useMemo(() => {
+    const fadingIds = new Set(Object.keys(fadingOut).map(Number));
+    return allHoy.filter((r) => r.estatus === "Agendado" || fadingIds.has(r.id));
+  }, [allHoy, fadingOut]);
+
+  const handleStatusWithFade = async (id, newStatus) => {
+    if (newStatus !== "Agendado") {
+      setFadingOut((prev) => ({ ...prev, [id]: Date.now() + 5000 }));
+    } else {
+      setFadingOut((prev) => { const n = { ...prev }; delete n[id]; return n; });
+    }
+    await onStatusChange(id, newStatus);
+  };
 
   const dateStr = new Date().toLocaleDateString("es-MX", { weekday: "long", day: "numeric", month: "long" });
   const capitalize = (s) => s.charAt(0).toUpperCase() + s.slice(1);
 
   const stats = useMemo(() => ({
-    total: hoy.length,
-    asistencia: hoy.filter((r) => r.estatus === "Asistencia").length,
-    falta: hoy.filter((r) => r.estatus === "Falta").length,
-    cancelacion: hoy.filter((r) => r.estatus === "Cancelación").length,
-    express: hoy.filter((r) => r.estatus === "Express").length,
-    pendientes: hoy.filter((r) => r.estatus === "Agendado").length,
-  }), [hoy]);
+    total: allHoy.length,
+    asistencia: allHoy.filter((r) => r.estatus === "Asistencia").length,
+    falta: allHoy.filter((r) => r.estatus === "Falta").length,
+    cancelacion: allHoy.filter((r) => r.estatus === "Cancelación").length,
+    express: allHoy.filter((r) => r.estatus === "Express").length,
+    pendientes: allHoy.filter((r) => r.estatus === "Agendado").length,
+  }), [allHoy]);
 
   return (
     <div>
@@ -343,12 +374,12 @@ function TabHome({ data, onStatusChange }) {
           {capitalize(dateStr)}
         </h1>
         <p style={{ color: "#8e92a6", fontSize: 14, margin: "4px 0 0" }}>
-          {hoy.length === 0 ? "Sin asesorías registradas para hoy" : `${hoy.length} asesoría${hoy.length !== 1 ? "s" : ""} agendada${hoy.length !== 1 ? "s" : ""}`}
+          {allHoy.length === 0 ? "Sin asesorías registradas para hoy" : `${allHoy.length} asesoría${allHoy.length !== 1 ? "s" : ""} agendada${allHoy.length !== 1 ? "s" : ""}`}
         </p>
       </div>
 
       {/* KPIs del día */}
-      {hoy.length > 0 && (
+      {allHoy.length > 0 && (
         <div style={{ ...S.grid(5), marginBottom: 24 }}>
           <KPI label="Total hoy" value={stats.total} color="#6366f1" />
           <KPI label="Pendientes" value={stats.pendientes} color="#8e92a6" />
@@ -359,7 +390,7 @@ function TabHome({ data, onStatusChange }) {
       )}
 
       {/* Lista de asesorías de hoy */}
-      {hoy.length === 0 ? (
+      {allHoy.length === 0 ? (
         <Cd>
           <div style={{ textAlign: "center", padding: 40 }}>
             <div style={{ fontSize: 40, marginBottom: 12, opacity: 0.3 }}>📅</div>
@@ -367,13 +398,24 @@ function TabHome({ data, onStatusChange }) {
             <div style={{ color: "#6b6f82", fontSize: 12, marginTop: 8 }}>Ve a la pestaña Asesorías para agregar nuevas.</div>
           </div>
         </Cd>
+      ) : visibleHoy.length === 0 ? (
+        <Cd>
+          <div style={{ textAlign: "center", padding: 40 }}>
+            <div style={{ fontSize: 40, marginBottom: 12 }}>✅</div>
+            <div style={{ color: "#10b981", fontSize: 15, fontWeight: 700 }}>¡Todas las asesorías de hoy están registradas!</div>
+            <div style={{ color: "#6b6f82", fontSize: 12, marginTop: 6 }}>Revisa los KPIs arriba para el resumen del día.</div>
+          </div>
+        </Cd>
       ) : (
         <Cd style={{ padding: 0, overflow: "hidden" }}>
-          <div style={{ padding: "16px 20px", borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
+          <div style={{ padding: "16px 20px", borderBottom: "1px solid rgba(255,255,255,0.06)", display: "flex", alignItems: "center", gap: 10 }}>
             <span style={{ fontWeight: 700, fontSize: 14, color: "#a5b4fc" }}>Asesorías de hoy</span>
+            {stats.pendientes > 0 && (
+              <span style={{ fontSize: 12, color: "#8e92a6" }}>{stats.pendientes} pendiente{stats.pendientes !== 1 ? "s" : ""}</span>
+            )}
           </div>
-          {hoy.map((r) => (
-            <HomeRow key={r.id} record={r} onStatusChange={onStatusChange} now={now} />
+          {visibleHoy.map((r) => (
+            <HomeRow key={r.id} record={r} onStatusChange={handleStatusWithFade} now={now} fadingUntil={fadingOut[r.id]} />
           ))}
         </Cd>
       )}
@@ -384,9 +426,21 @@ function TabHome({ data, onStatusChange }) {
   );
 }
 
-function HomeRow({ record: r, onStatusChange, now }) {
+function HomeRow({ record: r, onStatusChange, now, fadingUntil }) {
   const [saving, setSaving] = useState(false);
+  const [timeLeft, setTimeLeft] = useState(null);
   const current = r.estatus;
+
+  useEffect(() => {
+    if (!fadingUntil) { setTimeLeft(null); return; }
+    const tick = () => setTimeLeft(Math.max(0, Math.ceil((fadingUntil - Date.now()) / 1000)));
+    tick();
+    const t = setInterval(tick, 200);
+    return () => clearInterval(t);
+  }, [fadingUntil]);
+
+  const isFading = fadingUntil != null;
+  const isGone = timeLeft === 0;
 
   const isPastDue = useMemo(() => {
     if (current !== "Agendado" || r.modalidad === "Virtual" || !r.hora) return false;
@@ -402,7 +456,6 @@ function HomeRow({ record: r, onStatusChange, now }) {
 
   const handleStatus = async (clicked) => {
     if (saving) return;
-    // Click on active status → deselect back to Agendado (pending)
     const newStatus = current === clicked ? "Agendado" : clicked;
     setSaving(true);
     await onStatusChange(r.id, newStatus);
@@ -412,29 +465,42 @@ function HomeRow({ record: r, onStatusChange, now }) {
   const nombre = [r.nombre, r.ap, r.am].filter(Boolean).join(" ") || "Sin nombre";
   const cags = isCAGS(r);
   const dic25 = isDIC25(r);
+  const statusColor = STATUS_COLORS[current] || "#6b6f82";
+  const progressPct = isFading && fadingUntil ? Math.max(0, (fadingUntil - Date.now()) / 5000 * 100) : 100;
 
   return (
     <div style={{
       display: "flex", alignItems: "center", gap: 16, padding: "14px 20px",
       borderBottom: "1px solid rgba(255,255,255,0.04)",
-      borderLeft: isPastDue ? "3px solid rgba(245,158,11,0.5)" : "3px solid transparent",
-      background: current === "Asistencia" ? "rgba(16,185,129,0.04)"
-        : current === "Falta" ? "rgba(239,68,68,0.04)"
-        : current === "Cancelación" ? "rgba(139,92,246,0.04)"
-        : current === "Express" ? "rgba(245,158,11,0.04)"
+      borderLeft: isFading ? `3px solid ${statusColor}` : isPastDue ? "3px solid rgba(245,158,11,0.5)" : "3px solid transparent",
+      background: isFading ? `${statusColor}18`
         : isPastDue ? "rgba(245,158,11,0.06)"
         : "transparent",
-      transition: "background .2s",
+      opacity: isGone ? 0 : isFading ? 0.65 : 1,
+      maxHeight: isGone ? 0 : "200px",
+      overflow: "hidden",
+      transition: "opacity 0.35s, max-height 0.5s 0.35s",
+      position: "relative",
     }}
-      onMouseEnter={(e) => { if (current === "Agendado") e.currentTarget.style.background = isPastDue ? "rgba(245,158,11,0.1)" : "rgba(99,102,241,0.05)"; }}
-      onMouseLeave={(e) => { if (current === "Agendado") e.currentTarget.style.background = isPastDue ? "rgba(245,158,11,0.06)" : "transparent"; }}
+      onMouseEnter={(e) => { if (current === "Agendado" && !isFading) e.currentTarget.style.background = isPastDue ? "rgba(245,158,11,0.1)" : "rgba(99,102,241,0.05)"; }}
+      onMouseLeave={(e) => { if (current === "Agendado" && !isFading) e.currentTarget.style.background = isPastDue ? "rgba(245,158,11,0.06)" : "transparent"; }}
     >
+      {/* Barra de progreso del countdown */}
+      {isFading && (
+        <div style={{
+          position: "absolute", bottom: 0, left: 0,
+          height: 2, width: `${progressPct}%`,
+          background: statusColor,
+          transition: "width 0.2s linear",
+        }} />
+      )}
+
       {/* Hora */}
       <div style={{ ...S.mono, minWidth: 60, textAlign: "center" }}>
-        <div style={{ fontSize: 18, fontWeight: 700, color: isPastDue ? "#f59e0b" : "#6366f1" }}>
+        <div style={{ fontSize: 18, fontWeight: 700, color: isFading ? statusColor : isPastDue ? "#f59e0b" : "#6366f1" }}>
           {r.hora || "—"}
         </div>
-        {isPastDue && (
+        {isPastDue && !isFading && (
           <div style={{ fontSize: 9, color: "#f59e0b", fontWeight: 600, letterSpacing: 0.3, opacity: 0.85 }}>⏱ +15 min</div>
         )}
       </div>
@@ -460,34 +526,55 @@ function HomeRow({ record: r, onStatusChange, now }) {
 
       {/* Botones de estatus */}
       <div style={{ display: "flex", gap: 6, flexShrink: 0, alignItems: "center" }}>
-        {current === "Agendado" && (
-          <span style={{ fontSize: 10, fontWeight: 600, color: "#6b6f82", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 8, padding: "5px 10px", letterSpacing: 0.3 }}>
-            ◌ Pendiente
-          </span>
-        )}
-        {["Asistencia","Falta","Cancelación","Express"].map((s) => {
-          const col = STATUS_COLORS[s];
-          const active = current === s;
-          return (
-            <button key={s} onClick={() => handleStatus(s)} disabled={saving}
+        {isFading ? (
+          <>
+            <span style={{ fontSize: 11, fontWeight: 700, color: statusColor }}>
+              {current === "Asistencia" ? "✓" : current === "Falta" ? "✕" : current === "Cancelación" ? "⊘" : "⚡"} {current}
+            </span>
+            <span style={{ fontSize: 10, color: "#6b6f82" }}>· {timeLeft}s</span>
+            <button
+              onClick={() => handleStatus(current)}
+              disabled={saving}
               style={{
-                background: active ? `${col}33` : "rgba(255,255,255,0.04)",
-                color: active ? col : "#6b6f82",
-                border: `1px solid ${active ? col : "rgba(255,255,255,0.08)"}`,
-                borderRadius: 8, padding: "5px 10px", fontSize: 11, fontWeight: 600,
-                cursor: saving ? "wait" : "pointer", fontFamily: "'Plus Jakarta Sans'",
-                transition: "all .15s",
+                fontSize: 10, color: "#8e92a6", background: "rgba(255,255,255,0.06)",
+                border: "1px solid rgba(255,255,255,0.12)", borderRadius: 6,
+                padding: "4px 8px", cursor: saving ? "wait" : "pointer",
+                fontFamily: "'Plus Jakarta Sans'",
               }}
-              onMouseEnter={(e) => { if (!active && !saving) { e.target.style.color = col; e.target.style.borderColor = col; } }}
-              onMouseLeave={(e) => { if (!active && !saving) { e.target.style.color = "#6b6f82"; e.target.style.borderColor = "rgba(255,255,255,0.08)"; } }}
-            >
-              {s === "Asistencia" ? "✓ Asistencia"
-                : s === "Falta" ? "✕ Falta"
-                : s === "Cancelación" ? "⊘ Canceló"
-                : "⚡ Express"}
-            </button>
-          );
-        })}
+            >Deshacer</button>
+          </>
+        ) : (
+          <>
+            {current === "Agendado" && (
+              <span style={{ fontSize: 10, fontWeight: 600, color: "#6b6f82", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 8, padding: "5px 10px", letterSpacing: 0.3 }}>
+                ◌ Pendiente
+              </span>
+            )}
+            {["Asistencia","Falta","Cancelación","Express"].map((s) => {
+              const col = STATUS_COLORS[s];
+              const active = current === s;
+              return (
+                <button key={s} onClick={() => handleStatus(s)} disabled={saving}
+                  style={{
+                    background: active ? `${col}33` : "rgba(255,255,255,0.04)",
+                    color: active ? col : "#6b6f82",
+                    border: `1px solid ${active ? col : "rgba(255,255,255,0.08)"}`,
+                    borderRadius: 8, padding: "5px 10px", fontSize: 11, fontWeight: 600,
+                    cursor: saving ? "wait" : "pointer", fontFamily: "'Plus Jakarta Sans'",
+                    transition: "all .15s",
+                  }}
+                  onMouseEnter={(e) => { if (!active && !saving) { e.target.style.color = col; e.target.style.borderColor = col; } }}
+                  onMouseLeave={(e) => { if (!active && !saving) { e.target.style.color = "#6b6f82"; e.target.style.borderColor = "rgba(255,255,255,0.08)"; } }}
+                >
+                  {s === "Asistencia" ? "✓ Asistencia"
+                    : s === "Falta" ? "✕ Falta"
+                    : s === "Cancelación" ? "⊘ Canceló"
+                    : "⚡ Express"}
+                </button>
+              );
+            })}
+          </>
+        )}
       </div>
     </div>
   );
@@ -693,6 +780,187 @@ function emptyRow() {
     comunidad: "", celular: "", correo_personal: "", linkedin: "", notas: "" };
 }
 
+/* ═══ MODAL NUEVA ASESORÍA ═══ */
+function NuevaAsesoriaModal({ onClose, onRefresh }) {
+  const initForm = () => ({
+    dia: todayISO(), hora: "", matricula: "", nombre: "", ap: "", am: "",
+    servicio: "", clave: "", atiende: "", escuela: "", programa: "", estatus: "Agendado",
+    interes_asesoria: "", semestre: "", cag: "", exatec: "", modalidad: "", campus: "",
+    comunidad: "", celular: "", correo_personal: "", linkedin: "", notas: "",
+  });
+
+  const [form, setForm] = useState(initForm);
+  const [saving, setSaving] = useState(false);
+
+  const set = (key, val) => setForm((prev) => {
+    const next = { ...prev, [key]: val };
+    if (key === "servicio") next.clave = SERVICIO_CLAVE[val] || "";
+    if (key === "escuela") next.programa = "";
+    return next;
+  });
+
+  const schoolKey = ESCUELA_A_KEY[form.escuela] || null;
+  const programOpts = schoolKey ? CARRERAS.filter((c) => CARRERA_ESCUELA[c.siglas] === schoolKey) : [];
+
+  const handleSave = async (andNew = false) => {
+    setSaving(true);
+    try {
+      const payload = { ...form };
+      const { data: inserted, error } = await supabase.from("asesorias").insert(payload).select().single();
+      if (inserted && !error) {
+        await onRefresh();
+        if (andNew) {
+          setForm({ ...initForm(), dia: form.dia });
+        } else {
+          onClose();
+        }
+      }
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const inp = { ...S.input, width: "100%", boxSizing: "border-box", fontSize: 13 };
+  const sel = { ...S.select, width: "100%", boxSizing: "border-box", fontSize: 13 };
+  const lbl = { fontSize: 11, fontWeight: 600, color: "#8e92a6", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 4, display: "block" };
+  const g3 = { display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "16px 20px", marginBottom: 16 };
+  const g2 = { display: "grid", gridTemplateColumns: "1fr 1fr", gap: "16px 20px", marginBottom: 16 };
+
+  const TF = (key, label, ph = "") => (
+    <div key={key}>
+      <label style={lbl}>{label}</label>
+      <input style={inp} type="text" value={form[key]} placeholder={ph}
+        onChange={(e) => set(key, e.target.value)} />
+    </div>
+  );
+  const SF = (key, label, opts) => (
+    <div key={key}>
+      <label style={lbl}>{label}</label>
+      <select style={sel} value={form[key]} onChange={(e) => set(key, e.target.value)}>
+        <option value="">—</option>
+        {opts.map((o) => <option key={o} value={o}>{o}</option>)}
+      </select>
+    </div>
+  );
+
+  return (
+    <div
+      style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.72)", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center", backdropFilter: "blur(4px)", padding: 20 }}
+      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+    >
+      <div style={{ background: "#111827", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 16, width: "100%", maxWidth: 880, maxHeight: "92vh", overflow: "hidden", display: "flex", flexDirection: "column", boxShadow: "0 25px 60px rgba(0,0,0,0.55)" }}>
+        {/* Header */}
+        <div style={{ padding: "18px 24px", borderBottom: "1px solid rgba(255,255,255,0.06)", display: "flex", justifyContent: "space-between", alignItems: "center", flexShrink: 0 }}>
+          <div>
+            <h2 style={{ margin: 0, fontSize: 17, fontWeight: 800, color: "#f1f5f9" }}>Nueva Asesoría</h2>
+            <p style={{ margin: "2px 0 0", fontSize: 11, color: "#6b6f82" }}>Todos los campos son opcionales</p>
+          </div>
+          <button onClick={onClose} style={{ background: "none", border: "none", color: "#6b6f82", fontSize: 20, cursor: "pointer", padding: "4px 8px", borderRadius: 6, lineHeight: 1 }}>✕</button>
+        </div>
+
+        {/* Body */}
+        <div style={{ overflowY: "auto", padding: "20px 24px", flex: 1 }}>
+          {/* Fila 1: Día, Hora, Estatus */}
+          <div style={g3}>
+            <div>
+              <label style={lbl}>Día</label>
+              <input style={inp} type="date" value={form.dia} onChange={(e) => set("dia", e.target.value)} />
+            </div>
+            {TF("hora", "Hora", "09:00")}
+            <div>
+              <label style={lbl}>Estatus</label>
+              <select style={sel} value={form.estatus} onChange={(e) => set("estatus", e.target.value)}>
+                {ESTATUSES.map((o) => <option key={o} value={o}>{o}</option>)}
+              </select>
+            </div>
+          </div>
+          {/* Fila 2: Atiende, Servicio, Clave */}
+          <div style={g3}>
+            {SF("atiende", "Atiende", ASESORES)}
+            <div>
+              <label style={lbl}>Servicio</label>
+              <select style={sel} value={form.servicio} onChange={(e) => set("servicio", e.target.value)}>
+                <option value="">—</option>
+                {SERVICIOS.map((s) => <option key={s.label} value={s.label}>{s.label}</option>)}
+              </select>
+            </div>
+            <div>
+              <label style={lbl}>Clave</label>
+              <input style={{ ...inp, opacity: 0.45, cursor: "not-allowed" }} type="text" value={form.clave} readOnly placeholder="Auto" />
+            </div>
+          </div>
+          {/* Fila 3: Matrícula, Nombre, Modalidad */}
+          <div style={g3}>
+            {TF("matricula", "Matrícula")}
+            {TF("nombre", "Nombre")}
+            {SF("modalidad", "Modalidad", MODALIDADES)}
+          </div>
+          {/* Fila 4: AP, AM, Semestre */}
+          <div style={g3}>
+            {TF("ap", "Apellido Paterno")}
+            {TF("am", "Apellido Materno")}
+            {SF("semestre", "Semestre", SEMESTRES)}
+          </div>
+          {/* Fila 5: Escuela, Programa (cascade), CAG */}
+          <div style={g3}>
+            <div>
+              <label style={lbl}>Escuela</label>
+              <select style={sel} value={form.escuela} onChange={(e) => set("escuela", e.target.value)}>
+                <option value="">—</option>
+                {ESCUELAS_TEC.map((e) => <option key={e.siglas} value={e.siglas}>{e.siglas}</option>)}
+              </select>
+            </div>
+            <div>
+              <label style={lbl}>Programa</label>
+              <select style={{ ...sel, opacity: !schoolKey ? 0.45 : 1, cursor: !schoolKey ? "not-allowed" : "pointer" }}
+                value={form.programa} disabled={!schoolKey}
+                onChange={(e) => set("programa", e.target.value)}>
+                <option value="">{!schoolKey ? "↑ Selecciona escuela primero" : "—"}</option>
+                {programOpts.map((c) => <option key={c.siglas} value={c.siglas}>{c.siglas}</option>)}
+              </select>
+            </div>
+            {SF("cag", "CAG", CAG_OPTS)}
+          </div>
+          {/* Fila 6: EXATEC, Interés, Campus */}
+          <div style={g3}>
+            {SF("exatec", "EXATEC", EXATEC_OPTS)}
+            {SF("interes_asesoria", "Interés asesoría", INTERESES)}
+            {TF("campus", "Campus")}
+          </div>
+          {/* Fila 7: Comunidad, Celular, Correo */}
+          <div style={g3}>
+            {SF("comunidad", "Comunidad", COMUNIDADES)}
+            {TF("celular", "Celular")}
+            {TF("correo_personal", "Correo personal")}
+          </div>
+          {/* Fila 8: LinkedIn */}
+          <div style={g2}>
+            {TF("linkedin", "LinkedIn")}
+            <div />
+          </div>
+          {/* Notas full width */}
+          <div>
+            <label style={lbl}>Notas</label>
+            <textarea style={{ ...inp, minHeight: 70, resize: "vertical", fontFamily: "inherit" }}
+              value={form.notas} onChange={(e) => set("notas", e.target.value)} />
+          </div>
+        </div>
+
+        {/* Footer */}
+        <div style={{ padding: "14px 24px", borderTop: "1px solid rgba(255,255,255,0.06)", display: "flex", justifyContent: "flex-end", gap: 10, flexShrink: 0 }}>
+          <Bt color="#6b6f82" onClick={onClose}>Cancelar</Bt>
+          <Bt color="#6366f1" onClick={() => handleSave(true)} disabled={saving}>
+            {saving ? "Guardando..." : "+ Guardar y agregar otra"}
+          </Bt>
+          <Bt color="#10b981" onClick={() => handleSave(false)} disabled={saving}>
+            {saving ? "Guardando..." : "✓ Guardar"}
+          </Bt>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function TabAsesorias({ data, onRefresh }) {
   const [rows, setRows] = useState([]);
   const [editCell, setEditCell] = useState(null); // {rowIdx, key}
@@ -704,6 +972,7 @@ function TabAsesorias({ data, onRefresh }) {
   const [importing, setImporting] = useState(false);
   const [importMsg, setImportMsg] = useState(null);
   const [showPaste, setShowPaste] = useState(false);
+  const [showNewModal, setShowNewModal] = useState(false);
   const [gridPage, setGridPage] = useState(0);
   const [pageSize, setPageSize] = useState(25);
   const [hoveredRow, setHoveredRow] = useState(null);
@@ -1019,6 +1288,7 @@ function TabAsesorias({ data, onRefresh }) {
           <option value="">Todos los estatus</option>
           {ESTATUSES.map((s) => <option key={s} value={s}>{s}</option>)}
         </select>
+        <Bt color="#10b981" onClick={() => setShowNewModal(true)}>✚ Nueva asesoría</Bt>
         <div style={{ marginLeft: "auto", display: "flex", gap: 8, alignItems: "center" }}>
           <span style={{ ...S.mono, fontSize: 11, color: "#6b6f82" }}>{data.length} registros</span>
           {/* Zoom controls */}
@@ -1054,6 +1324,7 @@ function TabAsesorias({ data, onRefresh }) {
       </div>
 
       {showPaste && <PasteModal onClose={() => setShowPaste(false)} onImport={handlePasteImport} />}
+      {showNewModal && <NuevaAsesoriaModal onClose={() => setShowNewModal(false)} onRefresh={onRefresh} />}
 
       {importMsg && (
         <div style={{ marginBottom: 12, padding: "10px 16px", borderRadius: 10, fontSize: 13,
