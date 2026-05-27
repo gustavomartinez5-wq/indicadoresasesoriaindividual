@@ -1665,6 +1665,65 @@ function TabPipeline({ data }) {
   );
 }
 
+/* ═══ ÓSCARES DE LAS ASESORÍAS ═══ */
+function StudentOscars({ students, onSelect }) {
+  const awards = useMemo(() => {
+    if (students.length < 2) return [];
+
+    const withFaltas = students.map((s) => ({
+      ...s,
+      faltas: s.records.filter((r) => r.estatus === "Falta").length,
+      express: s.records.filter((r) => r.estatus === "Express").length,
+      serviciosUniq: new Set(s.records.map((r) => r.servicio).filter(Boolean)).size,
+      rate: s.sesiones ? s.asistencias / s.sesiones : 0,
+    }));
+
+    const bySession  = [...withFaltas].sort((a, b) => b.sesiones - a.sesiones)[0];
+    const byRate     = [...withFaltas].filter((s) => s.sesiones >= 3).sort((a, b) => b.rate - a.rate)[0];
+    const byFalta    = [...withFaltas].sort((a, b) => b.faltas - a.faltas)[0];
+    const bySrvs     = [...withFaltas].sort((a, b) => b.serviciosUniq - a.serviciosUniq)[0];
+    const byExpress  = [...withFaltas].filter((s) => s.express > 0).sort((a, b) => b.express - a.express)[0];
+
+    return [
+      { icon: "🥇", title: "Más asesorías",       student: bySession, stat: `${bySession.sesiones} sesiones`,          color: "#f59e0b" },
+      { icon: "⭐", title: "Mejor asistencia",      student: byRate,    stat: byRate ? `${(byRate.rate * 100).toFixed(0)}%` : null, color: "#10b981" },
+      { icon: "🎯", title: "Más servicios distintos", student: bySrvs,  stat: `${bySrvs.serviciosUniq} servicios`,      color: "#6366f1" },
+      { icon: "❌", title: "Más faltas",            student: byFalta.faltas > 0 ? byFalta : null, stat: byFalta.faltas > 0 ? `${byFalta.faltas} faltas` : null, color: "#ef4444" },
+      byExpress ? { icon: "⚡", title: "Rey del Express", student: byExpress, stat: `${byExpress.express} express`, color: "#8b5cf6" } : null,
+    ].filter((a) => a && a.student && a.stat);
+  }, [students]);
+
+  if (!awards.length) return null;
+
+  return (
+    <div style={{ marginBottom: 20 }}>
+      <div style={{ fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: 1, color: "#6b6f82", marginBottom: 10 }}>
+        🏆 Óscares de las Asesorías
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: `repeat(${awards.length}, 1fr)`, gap: 10 }}>
+        {awards.map((award, i) => {
+          const nombre = award.student ? [award.student.nombre, award.student.ap].filter(Boolean).join(" ") || award.student.matricula : "—";
+          return (
+            <div key={i} onClick={() => award.student && onSelect(award.student)}
+              style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: 14, padding: "14px 16px", cursor: "pointer", transition: "all .18s", borderTop: `3px solid ${award.color}22` }}
+              onMouseEnter={(e) => { e.currentTarget.style.background = `${award.color}0d`; e.currentTarget.style.borderColor = `${award.color}44`; e.currentTarget.style.transform = "translateY(-2px)"; }}
+              onMouseLeave={(e) => { e.currentTarget.style.background = "rgba(255,255,255,0.03)"; e.currentTarget.style.borderColor = "rgba(255,255,255,0.07)"; e.currentTarget.style.transform = "translateY(0)"; }}>
+              <div style={{ fontSize: 24, marginBottom: 8, lineHeight: 1 }}>{award.icon}</div>
+              <div style={{ fontSize: 9, textTransform: "uppercase", letterSpacing: 0.8, color: "#6b6f82", fontWeight: 600, marginBottom: 5 }}>{award.title}</div>
+              <div style={{ fontWeight: 700, fontSize: 13, color: "#e8e9ed", marginBottom: 4, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={nombre}>
+                {nombre}
+              </div>
+              <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 13, fontWeight: 700, color: award.color }}>{award.stat}</div>
+              {award.student?.isCAGS && <span style={{ ...S.badge("#a855f7"), fontSize: 8, marginTop: 4, display: "inline-block" }}>CAGS</span>}
+              {award.student?.isDIC25 && <span style={{ ...S.badge("#22d3ee"), fontSize: 8, marginTop: 4, marginLeft: 4, display: "inline-block" }}>DIC25</span>}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 /* ═══ TAB ALUMNOS ═══ */
 const PAGE_SIZE = 100;
 
@@ -1728,6 +1787,7 @@ function TabAlumnos({ data }) {
   return (
     <div>
       {selectedStudent && <StudentModal matricula={selectedStudent.matricula} records={selectedStudent.records} onClose={() => setSelectedStudent(null)} />}
+      <StudentOscars students={students} onSelect={setSelectedStudent} />
       <div style={{ display: "flex", gap: 8, marginBottom: 14, flexWrap: "wrap", alignItems: "center" }}>
         <input style={{ ...S.input, maxWidth: 280 }} placeholder="Buscar nombre o matrícula..." value={search} onChange={(e) => setSearch(e.target.value)} />
         <select style={S.select} value={fAsesor} onChange={(e) => setFAsesor(e.target.value)}>
