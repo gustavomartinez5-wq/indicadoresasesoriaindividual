@@ -652,6 +652,7 @@ function TabAsesorias({ data, onRefresh }) {
   const [importMsg, setImportMsg] = useState(null);
   const [showPaste, setShowPaste] = useState(false);
   const [gridPage, setGridPage] = useState(0);
+  const [pageSize, setPageSize] = useState(25);
   const [hoveredRow, setHoveredRow] = useState(null);
   const [insertCount, setInsertCount] = useState(5);
   const inputRef = useRef();
@@ -677,13 +678,12 @@ function TabAsesorias({ data, onRefresh }) {
     });
   }, [rows, dSearch, fAsesor, fEstatus]);
 
-  const GRID_PAGE_SIZE = 150;
   const existingItems = filteredWithIdx.filter(({ row }) => row.id !== null);
   const newItems = filteredWithIdx.filter(({ row }) => row.id === null);
-  const totalGridPages = Math.max(1, Math.ceil(existingItems.length / GRID_PAGE_SIZE));
+  const totalGridPages = Math.max(1, Math.ceil(existingItems.length / pageSize));
   const isLastGridPage = gridPage >= totalGridPages - 1;
   const pagedItems = [
-    ...existingItems.slice(gridPage * GRID_PAGE_SIZE, (gridPage + 1) * GRID_PAGE_SIZE),
+    ...existingItems.slice(gridPage * pageSize, (gridPage + 1) * pageSize),
     ...(isLastGridPage ? newItems : []),
   ];
 
@@ -1049,17 +1049,28 @@ function TabAsesorias({ data, onRefresh }) {
       </div>
 
       {/* Paginación */}
-      {totalGridPages > 1 && (
-        <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "12px 4px" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "12px 4px" }}>
+        {totalGridPages > 1 && <>
           <Bt color="#6366f1" onClick={() => setGridPage((p) => Math.max(0, p - 1))}
             style={{ padding: "4px 14px", fontSize: 12, opacity: gridPage === 0 ? 0.3 : 1, pointerEvents: gridPage === 0 ? "none" : "auto" }}>← Ant</Bt>
           <span style={{ ...S.mono, fontSize: 12, color: "#8e92a6" }}>
             Página {gridPage + 1} de {totalGridPages} · {existingItems.length} registros
           </span>
           <Bt color="#6366f1" onClick={() => setGridPage((p) => Math.min(totalGridPages - 1, p + 1))}
-            style={{ padding: "4px 14px", fontSize: 12, opacity: gridPage === totalGridPages - 1 ? 0.3 : 1, pointerEvents: gridPage === totalGridPages - 1 ? "none" : "auto" }}>Sig →</Bt>
+            style={{ padding: "4px 14px", fontSize: 12, opacity: isLastGridPage ? 0.3 : 1, pointerEvents: isLastGridPage ? "none" : "auto" }}>Sig →</Bt>
+        </>}
+        <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 6 }}>
+          <span style={{ fontSize: 12, color: "#6b6f82" }}>Filas por página:</span>
+          {[25, 50, 100, 150].map((n) => (
+            <button key={n} onClick={() => { setPageSize(n); setGridPage(0); }}
+              style={{ padding: "4px 10px", fontSize: 12, borderRadius: 6, border: "none", cursor: "pointer",
+                background: pageSize === n ? "#6366f1" : "rgba(255,255,255,0.06)",
+                color: pageSize === n ? "#fff" : "#8e92a6", fontWeight: pageSize === n ? 600 : 400 }}>
+              {n}
+            </button>
+          ))}
         </div>
-      )}
+      </div>
 
       <div style={{ marginTop: 8, color: "#6b6f82", fontSize: 11 }}>
         Clic en celda para editar · Tab / Enter para avanzar · se guarda automáticamente al salir
