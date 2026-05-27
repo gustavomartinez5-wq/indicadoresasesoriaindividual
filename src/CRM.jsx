@@ -341,13 +341,12 @@ function TabHome({ data, onStatusChange }) {
   );
 
   const visibleHoy = useMemo(() => {
-    const fadingIds = new Set(Object.keys(fadingOut).map(Number));
-    return allHoy.filter((r) => r.estatus === "Agendado" || fadingIds.has(r.id));
+    return allHoy.filter((r) => r.estatus === "Agendado" || fadingOut[r.id] != null);
   }, [allHoy, fadingOut]);
 
   const handleStatusWithFade = async (id, newStatus) => {
     if (newStatus !== "Agendado") {
-      setFadingOut((prev) => ({ ...prev, [id]: Date.now() + 5000 }));
+      setFadingOut((prev) => ({ ...prev, [id]: Date.now() + 8000 }));
     } else {
       setFadingOut((prev) => { const n = { ...prev }; delete n[id]; return n; });
     }
