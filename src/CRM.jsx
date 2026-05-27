@@ -666,7 +666,6 @@ function TabAsesorias({ data, onRefresh }) {
   const [insertCount, setInsertCount] = useState(5);
   const [selectedIds, setSelectedIds] = useState(new Set());
   const [lastAction, setLastAction] = useState(null); // { type, ... } for undo
-  const [hoveredSep, setHoveredSep] = useState(null);
   const [zoom, setZoom] = useState(() => {
     try { return parseFloat(localStorage.getItem("asesoria-zoom") || "1"); } catch { return 1; }
   });
@@ -726,29 +725,8 @@ function TabAsesorias({ data, onRefresh }) {
     });
   };
 
-  // Render a hover-insert separator row
-  const renderSep = (key, insertAtIdx) => {
-    const isHov = hoveredSep === key;
-    return (
-      <tr key={key}
-        onMouseEnter={() => setHoveredSep(key)}
-        onMouseLeave={() => setHoveredSep(null)}
-        onClick={() => {
-          setRows((prev) => { const next = [...prev]; next.splice(insertAtIdx, 0, emptyRow()); return next; });
-          setHoveredSep(null);
-        }}
-        style={{ height: isHov ? 14 : 2, cursor: isHov ? "pointer" : "default", transition: "height .1s" }}>
-        <td colSpan={GRID_COLS.length + 2} style={{
-          padding: 0, textAlign: "center", overflow: "hidden", lineHeight: "14px",
-          background: isHov ? "rgba(99,102,241,0.15)" : "transparent",
-          borderTop: isHov ? "1.5px solid rgba(99,102,241,0.45)" : "none",
-          borderBottom: isHov ? "1.5px solid rgba(99,102,241,0.45)" : "none",
-          transition: "all .1s", color: "#6366f1", fontWeight: 800, fontSize: 13,
-        }}>
-          {isHov ? "＋" : null}
-        </td>
-      </tr>
-    );
+  const insertAt = (idx) => {
+    setRows((prev) => { const next = [...prev]; next.splice(idx, 0, emptyRow()); return next; });
   };
 
   const updateRowLocal = (rowIdx, key, value) => {
@@ -1088,7 +1066,7 @@ function TabAsesorias({ data, onRefresh }) {
             </tr>
           </thead>
           <tbody>
-            {pagedItems.flatMap(({ row, rowsIdx }, i) => {
+            {pagedItems.map(({ row, rowsIdx }) => {
               const isNew = row.id === null;
               const isSaving = saving.has(rowsIdx);
               const isHov = hoveredRow === rowsIdx;
@@ -1105,31 +1083,50 @@ function TabAsesorias({ data, onRefresh }) {
                   onMouseEnter={() => setHoveredRow(rowsIdx)}
                   onMouseLeave={() => setHoveredRow(null)}>
                   {/* Action col — frozen */}
-                  <td style={{ position: "sticky", left: 0, zIndex: 2, background: selFrozenBg, width: ACT_COL_W, padding: "4px 8px", borderBottom: "1px solid rgba(255,255,255,0.04)", textAlign: "center", transition: "background .1s" }}>
+                  <td style={{ position: "sticky", left: 0, zIndex: 2, background: selFrozenBg, width: ACT_COL_W, padding: 0, borderBottom: "1px solid rgba(255,255,255,0.04)", textAlign: "center", transition: "background .1s", verticalAlign: "middle" }}>
                     {isSaving ? (
-                      <span style={{ display: "inline-block", width: 12, height: 12, border: "2px solid rgba(99,102,241,0.3)", borderTopColor: "#6366f1", borderRadius: "50%", animation: "spin 0.8s linear infinite" }} />
+                      <div style={{ display: "flex", justifyContent: "center", padding: "4px 0" }}>
+                        <span style={{ display: "inline-block", width: 12, height: 12, border: "2px solid rgba(99,102,241,0.3)", borderTopColor: "#6366f1", borderRadius: "50%", animation: "spin 0.8s linear infinite" }} />
+                      </div>
                     ) : !isNew ? (
-                      isSelected ? (
-                        <input type="checkbox" checked onChange={() => toggleSelect(row.id)}
-                          onClick={(e) => e.stopPropagation()}
-                          style={{ cursor: "pointer", accentColor: "#6366f1" }} />
-                      ) : isHov ? (
-                        <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 2 }}>
-                          <input type="checkbox" checked={false} onChange={() => toggleSelect(row.id)}
-                            onClick={(e) => e.stopPropagation()}
-                            style={{ cursor: "pointer", accentColor: "#6366f1" }} />
-                          <button onClick={() => duplicateRow(rowsIdx)} title="Duplicar fila"
-                            style={{ background: "none", border: "none", color: "#6b6f82", cursor: "pointer", padding: "1px 2px", fontSize: 11, lineHeight: 1 }}
-                            onMouseEnter={(e) => e.currentTarget.style.color = "#a5b4fc"}
-                            onMouseLeave={(e) => e.currentTarget.style.color = "#6b6f82"}>⎘</button>
-                          <button onClick={() => deleteRow(rowsIdx)} title="Eliminar"
-                            style={{ background: "none", border: "none", color: "#6b6f82", cursor: "pointer", padding: "1px 2px", fontSize: 11, lineHeight: 1 }}
-                            onMouseEnter={(e) => e.currentTarget.style.color = "#ef4444"}
-                            onMouseLeave={(e) => e.currentTarget.style.color = "#6b6f82"}>✕</button>
+                      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 0 }}>
+                        {/* Insert above */}
+                        <button onClick={(e) => { e.stopPropagation(); insertAt(rowsIdx); }}
+                          title="Insertar fila arriba"
+                          style={{ background: "none", border: "none", cursor: "pointer", color: isHov ? "#6366f1" : "transparent", padding: "2px 0", width: "100%", fontSize: 9, lineHeight: 1, pointerEvents: isHov ? "auto" : "none" }}
+                          onMouseEnter={(e) => e.currentTarget.style.background = "rgba(99,102,241,0.15)"}
+                          onMouseLeave={(e) => e.currentTarget.style.background = "none"}>▲ +</button>
+                        {/* Middle controls */}
+                        <div style={{ padding: "2px 4px", display: "flex", alignItems: "center", justifyContent: "center", gap: 2, minHeight: 24 }}>
+                          {isSelected ? (
+                            <input type="checkbox" checked onChange={() => toggleSelect(row.id)}
+                              onClick={(e) => e.stopPropagation()}
+                              style={{ cursor: "pointer", accentColor: "#6366f1" }} />
+                          ) : isHov ? (
+                            <>
+                              <input type="checkbox" checked={false} onChange={() => toggleSelect(row.id)}
+                                onClick={(e) => e.stopPropagation()}
+                                style={{ cursor: "pointer", accentColor: "#6366f1" }} />
+                              <button onClick={() => duplicateRow(rowsIdx)} title="Duplicar"
+                                style={{ background: "none", border: "none", color: "#6b6f82", cursor: "pointer", padding: "1px 2px", fontSize: 11, lineHeight: 1 }}
+                                onMouseEnter={(e) => e.currentTarget.style.color = "#a5b4fc"}
+                                onMouseLeave={(e) => e.currentTarget.style.color = "#6b6f82"}>⎘</button>
+                              <button onClick={() => deleteRow(rowsIdx)} title="Eliminar"
+                                style={{ background: "none", border: "none", color: "#6b6f82", cursor: "pointer", padding: "1px 2px", fontSize: 11, lineHeight: 1 }}
+                                onMouseEnter={(e) => e.currentTarget.style.color = "#ef4444"}
+                                onMouseLeave={(e) => e.currentTarget.style.color = "#6b6f82"}>✕</button>
+                            </>
+                          ) : (
+                            <span style={{ color: "#3a3f5a", fontSize: 10, fontVariantNumeric: "tabular-nums" }}>{rowNum}</span>
+                          )}
                         </div>
-                      ) : (
-                        <span style={{ color: "#3a3f5a", fontSize: 10, fontVariantNumeric: "tabular-nums" }}>{rowNum}</span>
-                      )
+                        {/* Insert below */}
+                        <button onClick={(e) => { e.stopPropagation(); insertAt(rowsIdx + 1); }}
+                          title="Insertar fila abajo"
+                          style={{ background: "none", border: "none", cursor: "pointer", color: isHov ? "#6366f1" : "transparent", padding: "2px 0", width: "100%", fontSize: 9, lineHeight: 1, pointerEvents: isHov ? "auto" : "none" }}
+                          onMouseEnter={(e) => e.currentTarget.style.background = "rgba(99,102,241,0.15)"}
+                          onMouseLeave={(e) => e.currentTarget.style.background = "none"}>▼ +</button>
+                      </div>
                     ) : (
                       <button onClick={() => discardNewRow(rowsIdx)} title="Descartar fila"
                         style={{ background: "none", border: "none", color: "#4a5080", cursor: "pointer", padding: 4, fontSize: 14, lineHeight: 1, borderRadius: 4 }}
@@ -1200,11 +1197,7 @@ function TabAsesorias({ data, onRefresh }) {
                 </tr>
               );
 
-              return [
-                ...(i === 0 ? [renderSep(`sep-pre-${rowsIdx}`, rowsIdx)] : []),
-                rowEl,
-                renderSep(`sep-post-${rowsIdx}`, rowsIdx + 1),
-              ];
+              return rowEl;
             })}
           </tbody>
         </table>
