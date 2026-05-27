@@ -41,8 +41,10 @@ function fmtDate(d) {
   if (!d) return "—";
   return new Date(d + "T12:00:00").toLocaleDateString("es-MX", { day: "2-digit", month: "short", year: "numeric" });
 }
+const TZ = "America/Mexico_City";
 function todayISO() {
-  return new Date().toISOString().slice(0, 10);
+  // toLocaleDateString("en-CA") gives YYYY-MM-DD format in the specified TZ
+  return new Date().toLocaleDateString("en-CA", { timeZone: TZ });
 }
 function sortGridRows(arr) {
   const nullRows = arr.filter((r) => r.id === null);
@@ -386,9 +388,11 @@ function HomeRow({ record: r, onStatusChange, now }) {
     const parts = r.hora.split(":");
     const hh = parseInt(parts[0], 10), mm = parseInt(parts[1], 10);
     if (isNaN(hh) || isNaN(mm)) return false;
-    const sessionTime = new Date(now);
+    // Convert current time to CDMX to avoid UTC vs. local-timezone discrepancies
+    const cdmxNow = new Date(now.toLocaleString("en-US", { timeZone: TZ }));
+    const sessionTime = new Date(cdmxNow);
     sessionTime.setHours(hh, mm, 0, 0);
-    return (now - sessionTime) > 15 * 60 * 1000;
+    return (cdmxNow - sessionTime) > 15 * 60 * 1000;
   }, [current, r.modalidad, r.hora, now]);
 
   const handleStatus = async (clicked) => {
