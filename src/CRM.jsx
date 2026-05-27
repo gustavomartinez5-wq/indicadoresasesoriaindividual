@@ -626,9 +626,10 @@ const GRID_COLS = [
 ];
 
 const FROZEN_COUNT = 4; // dia, hora, matricula, nombre
+const ACT_COL_W = 52;
 const FROZEN_LEFT = (() => {
   const map = { __del: 0 };
-  let left = 40;
+  let left = ACT_COL_W;
   GRID_COLS.forEach((col, i) => { if (i < FROZEN_COUNT) { map[col.key] = left; left += col.width; } });
   return map;
 })();
@@ -657,6 +658,7 @@ function TabAsesorias({ data, onRefresh }) {
   const [hoveredRow, setHoveredRow] = useState(null);
   const [insertCount, setInsertCount] = useState(5);
   const [selectedIds, setSelectedIds] = useState(new Set());
+  const [lastAction, setLastAction] = useState(null); // { type, ... } for undo
   const inputRef = useRef();
   const dSearch = useDebounce(search, 200);
 
@@ -665,6 +667,12 @@ function TabAsesorias({ data, onRefresh }) {
     setGridPage(0);
     setSelectedIds(new Set());
   }, [data]);
+
+  const undoLabel = lastAction
+    ? lastAction.type === "delete" ? `↩ Revertir eliminación (${lastAction.rows.length})`
+    : lastAction.type === "update" ? "↩ Revertir edición"
+    : "↩ Revertir inserción"
+    : null;
 
   useEffect(() => { setGridPage(0); }, [dSearch, fAsesor, fEstatus]);
 
@@ -727,11 +735,16 @@ function TabAsesorias({ data, onRefresh }) {
     setSaving((s) => new Set(s).add(rowIdx));
     try {
       if (row.id) {
+        const oldRow = data.find((r) => r.id === row.id);
         const { error } = await supabase.from("asesorias").update(payload).eq("id", row.id);
-        if (!error) setRows((prev) => prev.map((r, i) => i === rowIdx ? { ...r, ...payload } : r));
+        if (!error) {
+          if (oldRow) setLastAction({ type: "update", id: row.id, oldRow });
+          setRows((prev) => prev.map((r, i) => i === rowIdx ? { ...r, ...payload } : r));
+        }
       } else {
         const { data: inserted } = await supabase.from("asesorias").insert(payload).select().single();
         if (inserted) {
+          setLastAction({ type: "insert", ids: [inserted.id] });
           setRows((prev) => {
             const next = [...prev];
             next[rowIdx] = inserted;
@@ -750,7 +763,8 @@ function TabAsesorias({ data, onRefresh }) {
     if (!row?.id || deleting.has(rowIdx)) return;
     if (!confirm(`¿Eliminar la asesoría de ${row.nombre || row.matricula}?`)) return;
     setDeleting((s) => new Set(s).add(rowIdx));
-    await supabase.from("asesorias").delete().eq("id", row.id);
+    const { data: deleted } = await supabase.from("asesorias").delete().eq("id", row.id).select();
+    if (deleted?.length) setLastAction({ type: "delete", rows: deleted });
     setSelectedIds((s) => { const n = new Set(s); n.delete(row.id); return n; });
     await onRefresh();
     setDeleting((s) => { const n = new Set(s); n.delete(rowIdx); return n; });
@@ -760,7 +774,8 @@ function TabAsesorias({ data, onRefresh }) {
     const ids = [...selectedIds];
     if (!ids.length) return;
     if (!confirm(`¿Eliminar ${ids.length} asesoría(s) seleccionada(s)?`)) return;
-    await supabase.from("asesorias").delete().in("id", ids);
+    const { data: deleted } = await supabase.from("asesorias").delete().in("id", ids).select();
+    if (deleted?.length) setLastAction({ type: "delete", rows: deleted });
     setSelectedIds(new Set());
     await onRefresh();
   };
@@ -771,6 +786,33 @@ function TabAsesorias({ data, onRefresh }) {
       next.has(id) ? next.delete(id) : next.add(id);
       return next;
     });
+  };
+
+  const discardNewRow = (rowsIdx) => {
+    setRows((prev) => {
+      const next = prev.filter((_, i) => i !== rowsIdx);
+      return next.some((r) => r.id === null) ? next : [emptyRow(), ...next];
+    });
+  };
+
+  const doUndo = async () => {
+    if (!lastAction) return;
+    try {
+      if (lastAction.type === "delete") {
+        await supabase.from("asesorias").upsert(lastAction.rows);
+      } else if (lastAction.type === "update") {
+        const p = { ...lastAction.oldRow };
+        delete p.id;
+        delete p._k;
+        await supabase.from("asesorias").update(p).eq("id", lastAction.id);
+      } else if (lastAction.type === "insert") {
+        await supabase.from("asesorias").delete().in("id", lastAction.ids);
+      }
+      setLastAction(null);
+      await onRefresh();
+    } catch (e) {
+      console.error("Undo failed:", e);
+    }
   };
 
   const handleCellBlur = (rowIdx) => {
@@ -904,6 +946,7 @@ function TabAsesorias({ data, onRefresh }) {
         </select>
         <div style={{ marginLeft: "auto", display: "flex", gap: 8, alignItems: "center" }}>
           <span style={{ ...S.mono, fontSize: 11, color: "#6b6f82" }}>{data.length} registros</span>
+          {undoLabel && <Bt color="#f59e0b" onClick={doUndo}>{undoLabel}</Bt>}
           {selectedIds.size > 0 && (
             <Bt color="#ef4444" onClick={deleteSelected}>🗑 Eliminar ({selectedIds.size})</Bt>
           )}
@@ -941,11 +984,11 @@ function TabAsesorias({ data, onRefresh }) {
 
       {/* Grid */}
       <div style={{ overflowX: "auto", overflowY: "auto", maxHeight: "calc(100vh - 230px)", borderRadius: 12, border: "1px solid rgba(255,255,255,0.08)" }}>
-        <table style={{ borderCollapse: "collapse", fontSize: 12, tableLayout: "fixed", minWidth: GRID_COLS.reduce((a, c) => a + c.width, 0) + 40 }}>
+        <table style={{ borderCollapse: "collapse", fontSize: 12, tableLayout: "fixed", minWidth: GRID_COLS.reduce((a, c) => a + c.width, 0) + ACT_COL_W }}>
           <thead>
             <tr>
               {/* Select/delete col — frozen corner */}
-              <th style={{ position: "sticky", top: 0, left: 0, zIndex: 21, width: 40, padding: "10px 8px", borderBottom: "1px solid rgba(255,255,255,0.1)", background: "#0a1525", textAlign: "center" }}>
+              <th style={{ position: "sticky", top: 0, left: 0, zIndex: 21, width: ACT_COL_W, padding: "10px 8px", borderBottom: "1px solid rgba(255,255,255,0.1)", background: "#0a1525", textAlign: "center" }}>
                 {(() => {
                   const selectableIds = pagedItems.filter(({ row }) => row.id !== null).map(({ row }) => row.id);
                   const allChecked = selectableIds.length > 0 && selectableIds.every((id) => selectedIds.has(id));
@@ -1000,7 +1043,7 @@ function TabAsesorias({ data, onRefresh }) {
                   onMouseEnter={() => setHoveredRow(rowsIdx)}
                   onMouseLeave={() => setHoveredRow(null)}>
                   {/* Select / saving — frozen */}
-                  <td style={{ position: "sticky", left: 0, zIndex: 2, background: selFrozenBg, width: 40, padding: "4px 6px", borderBottom: "1px solid rgba(255,255,255,0.04)", textAlign: "center", transition: "background .1s" }}>
+                  <td style={{ position: "sticky", left: 0, zIndex: 2, background: selFrozenBg, width: ACT_COL_W, padding: "4px 8px", borderBottom: "1px solid rgba(255,255,255,0.04)", textAlign: "center", transition: "background .1s" }}>
                     {isSaving ? (
                       <span style={{ display: "inline-block", width: 12, height: 12, border: "2px solid rgba(99,102,241,0.3)", borderTopColor: "#6366f1", borderRadius: "50%", animation: "spin 0.8s linear infinite" }} />
                     ) : !isNew ? (
@@ -1019,7 +1062,10 @@ function TabAsesorias({ data, onRefresh }) {
                         </div>
                       ) : null
                     ) : (
-                      <span style={{ color: "#4a5080", fontSize: 10 }}>+</span>
+                      <button onClick={() => discardNewRow(rowsIdx)} title="Descartar fila"
+                        style={{ background: "none", border: "none", color: "#4a5080", cursor: "pointer", padding: 4, fontSize: 14, lineHeight: 1, borderRadius: 4 }}
+                        onMouseEnter={(e) => { e.currentTarget.style.color = "#ef4444"; e.currentTarget.style.background = "rgba(239,68,68,0.1)"; }}
+                        onMouseLeave={(e) => { e.currentTarget.style.color = "#4a5080"; e.currentTarget.style.background = "none"; }}>✕</button>
                     )}
                   </td>
                   {GRID_COLS.map((col, colIdx) => {
@@ -1085,16 +1131,6 @@ function TabAsesorias({ data, onRefresh }) {
                 </tr>
               );
             })}
-            <tr
-              onClick={() => doInsertRows(1)}
-              style={{ cursor: "pointer", background: "transparent", transition: "background .1s" }}
-              onMouseEnter={(e) => e.currentTarget.style.background = "rgba(99,102,241,0.06)"}
-              onMouseLeave={(e) => e.currentTarget.style.background = "transparent"}
-              title="Agregar una fila">
-              <td colSpan={GRID_COLS.length + 1} style={{ padding: "8px 16px", textAlign: "center", color: "#4a5080", fontSize: 13, borderTop: "1px solid rgba(255,255,255,0.06)" }}>
-                + agregar fila
-              </td>
-            </tr>
           </tbody>
         </table>
       </div>
