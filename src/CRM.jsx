@@ -1025,6 +1025,39 @@ function TabAsesorias({ data, onRefresh }) {
         </div>
       )}
 
+      {/* Select-all-pages banner */}
+      {(() => {
+        const selectablePageIds = pagedItems.filter(({ row }) => row.id !== null).map(({ row }) => row.id);
+        const allFilteredSavedIds = existingItems.map(({ row }) => row.id);
+        const pageAllChecked = selectablePageIds.length > 0 && selectablePageIds.every((id) => selectedIds.has(id));
+        const allFilteredSelected = allFilteredSavedIds.length > 0 && allFilteredSavedIds.every((id) => selectedIds.has(id));
+        const hasMorePages = allFilteredSavedIds.length > selectablePageIds.length;
+
+        if (allFilteredSelected && hasMorePages) {
+          return (
+            <div style={{ marginBottom: 10, padding: "8px 14px", borderRadius: 8, background: "rgba(99,102,241,0.12)", border: "1px solid rgba(99,102,241,0.3)", fontSize: 12, color: "#a5b4fc", display: "flex", alignItems: "center", gap: 8 }}>
+              <span>✓ Todos los <strong>{allFilteredSavedIds.length}</strong> registros están seleccionados.</span>
+              <button onClick={() => setSelectedIds(new Set())}
+                style={{ background: "none", border: "none", color: "#6366f1", cursor: "pointer", fontSize: 12, textDecoration: "underline", padding: 0, fontFamily: "'Plus Jakarta Sans'" }}>
+                Limpiar selección
+              </button>
+            </div>
+          );
+        }
+        if (pageAllChecked && !allFilteredSelected && hasMorePages) {
+          return (
+            <div style={{ marginBottom: 10, padding: "8px 14px", borderRadius: 8, background: "rgba(99,102,241,0.07)", border: "1px solid rgba(99,102,241,0.2)", fontSize: 12, color: "#8e92a6", display: "flex", alignItems: "center", gap: 8 }}>
+              <span>Seleccionados <strong style={{ color: "#a5b4fc" }}>{selectablePageIds.length}</strong> registros de esta página.</span>
+              <button onClick={() => setSelectedIds(new Set(allFilteredSavedIds))}
+                style={{ background: "none", border: "none", color: "#6366f1", cursor: "pointer", fontSize: 12, textDecoration: "underline", padding: 0, fontFamily: "'Plus Jakarta Sans'" }}>
+                Seleccionar todos los {allFilteredSavedIds.length} registros
+              </button>
+            </div>
+          );
+        }
+        return null;
+      })()}
+
       {/* Grid */}
       <div style={{ overflowX: "auto", overflowY: "auto", maxHeight: `calc((100vh - 230px) / ${zoom})`, borderRadius: 12, border: "1px solid rgba(255,255,255,0.08)", zoom }}>
         <table style={{ borderCollapse: "collapse", fontSize: 12, tableLayout: "fixed", minWidth: GRID_COLS.reduce((a, c) => a + c.width, 0) + ACT_COL_W }}>
