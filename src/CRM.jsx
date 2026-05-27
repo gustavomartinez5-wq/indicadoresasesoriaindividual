@@ -46,11 +46,16 @@ function todayISO() {
   // toLocaleDateString("en-CA") gives YYYY-MM-DD format in the specified TZ
   return new Date().toLocaleDateString("en-CA", { timeZone: TZ });
 }
+function parseHora(h) {
+  if (!h) return 9999;
+  const [hh, mm] = h.split(":").map(Number);
+  return (isNaN(hh) ? 0 : hh) * 60 + (isNaN(mm) ? 0 : mm);
+}
 function sortGridRows(arr) {
   const nullRows = arr.filter((r) => r.id === null);
   const saved = arr.filter((r) => r.id !== null).sort((a, b) => {
     if ((b.dia || "") !== (a.dia || "")) return (b.dia || "") > (a.dia || "") ? 1 : -1;
-    return (a.hora || "") < (b.hora || "") ? -1 : (a.hora || "") > (b.hora || "") ? 1 : 0;
+    return parseHora(a.hora) - parseHora(b.hora);
   });
   return [...nullRows, ...saved];
 }
@@ -1889,6 +1894,11 @@ export default function CRM() {
       if (rows.length < BATCH) break;
       from += BATCH;
     }
+    // Supabase sorts hora as text ("10:00" < "9:00"), fix with numeric sort in JS
+    all.sort((a, b) => {
+      if ((b.dia || "") !== (a.dia || "")) return (b.dia || "") > (a.dia || "") ? 1 : -1;
+      return parseHora(a.hora) - parseHora(b.hora);
+    });
     setData(all);
     setLoading(false);
   }, []);
