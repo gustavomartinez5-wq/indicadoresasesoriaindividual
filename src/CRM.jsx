@@ -113,6 +113,8 @@ function parseClipDate(v, fmt = "mdy") {
   if (parts) {
     const [, a, b, y] = parts;
     const [m, d] = fmt === "mdy" ? [a, b] : [b, a];
+    const mi = parseInt(m), di = parseInt(d);
+    if (mi < 1 || mi > 12 || di < 1 || di > 31) return null;
     return `${y}-${m.padStart(2, "0")}-${d.padStart(2, "0")}`;
   }
   return null;
@@ -138,7 +140,7 @@ function parsePastedTSV(text, dateFmt = "mdy") {
     colMap.forEach((key, i) => {
       if (!key) return;
       const val = cells[i] ?? "";
-      if (key === "dia") row[key] = parseClipDate(val, dateFmt) || (val || null);
+      if (key === "dia") row[key] = parseClipDate(val, dateFmt) || null;
       else row[key] = val;
     });
     if (row.servicio && !row.clave) row.clave = SERVICIO_CLAVE[row.servicio] || "";
@@ -487,7 +489,7 @@ function RecentSection({ data, today }) {
 /* ═══ PASTE MODAL ═══ */
 function PasteModal({ onClose, onImport }) {
   const [text, setText] = useState("");
-  const [dateFmt, setDateFmt] = useState("dmy");
+  const [dateFmt, setDateFmt] = useState("mdy");
   const [parsed, setParsed] = useState(null);
   const [importing, setImporting] = useState(false);
 
@@ -740,18 +742,34 @@ function TabAsesorias({ data, onRefresh }) {
 
   /* Paste import */
   const handlePasteImport = async (rows) => {
+    const validFields = ["dia","hora","matricula","nombre","ap","am","servicio","clave","atiende",
+      "escuela","programa","estatus","interes_asesoria","semestre","cag","exatec","modalidad",
+      "campus","comunidad","celular","correo_personal","linkedin","notas"];
     const toInsert = rows.map((r) => {
-      const clean = { ...r };
-      Object.keys(clean).forEach((k) => { if (clean[k] === "") clean[k] = null; });
+      const clean = {};
+      validFields.forEach((k) => {
+        const v = r[k];
+        clean[k] = (v === "" || v === undefined) ? null : v;
+      });
       return clean;
     });
-    const chunkSize = 500;
+    const chunkSize = 200;
     let inserted = 0;
+    let firstError = null;
     for (let i = 0; i < toInsert.length; i += chunkSize) {
       const { error } = await supabase.from("asesorias").insert(toInsert.slice(i, i + chunkSize));
-      if (!error) inserted += Math.min(chunkSize, toInsert.length - i);
+      if (error) {
+        if (!firstError) firstError = error;
+        console.error("Supabase insert error:", error, toInsert.slice(i, i + 3));
+      } else {
+        inserted += Math.min(chunkSize, toInsert.length - i);
+      }
     }
-    setImportMsg({ type: "ok", text: `${inserted} registros pegados correctamente.` });
+    if (firstError) {
+      setImportMsg({ type: "error", text: `Error al insertar: ${firstError.message} (${firstError.code}). Se insertaron ${inserted} de ${toInsert.length}.` });
+    } else {
+      setImportMsg({ type: "ok", text: `${inserted} registros pegados correctamente.` });
+    }
     await onRefresh();
   };
 
