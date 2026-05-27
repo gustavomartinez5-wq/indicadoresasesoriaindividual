@@ -1,81 +1,30 @@
 import { useState, useMemo, useCallback, useRef, useEffect } from "react";
 import * as XLSX from "xlsx";
 import {
-  BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, PieChart, Pie, Cell,
-  LineChart, Line, CartesianGrid, Legend
+  BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer,
+  PieChart, Pie, Cell, LineChart, Line, CartesianGrid, Legend,
 } from "recharts";
+import { supabase } from "./supabaseClient";
+import {
+  ASESORES, ESCUELAS, SERVICIOS, SERVICIO_CLAVE, ESTATUSES,
+  SEMESTRES, CAG_OPTS, EXATEC_OPTS, MODALIDADES, INTERESES,
+  COMUNIDADES, STATUS_COLORS, CHART_COLORS,
+} from "./constants";
 
-/* ═══════════════ CONSTANTS ═══════════════ */
-const CHART_COLORS = ["#6366f1","#10b981","#f59e0b","#ef4444","#8b5cf6","#ec4899","#f97316","#14b8a6","#3b82f6","#a855f7","#84cc16","#06b6d4","#e11d48","#22d3ee"];
-const STATUS_COLORS = { Asistencia:"#10b981", Falta:"#ef4444", Express:"#f59e0b", "Cancelación":"#8b5cf6" };
+/* ═══ TABS ═══ */
 const TABS = [
-  { id:"dashboard", icon:"◈", label:"Dashboard" },
-  { id:"asesores", icon:"◎", label:"Asesores" },
-  { id:"pipeline", icon:"◐", label:"Pipeline" },
-  { id:"alumnos", icon:"◇", label:"Alumnos" },
-  { id:"custom", icon:"◆", label:"Personalizado" }
+  { id: "home",       icon: "◉", label: "Home" },
+  { id: "asesorias",  icon: "◈", label: "Asesorías" },
+  { id: "dashboard",  icon: "◐", label: "Dashboard" },
+  { id: "asesores",   icon: "◎", label: "Asesores" },
+  { id: "pipeline",   icon: "◑", label: "Pipeline" },
+  { id: "alumnos",    icon: "◇", label: "Alumnos" },
 ];
-const DIMS = ["servicio","asesor","escuela","programa","estatus","interes","modalidad","comunidad","semestre"];
 
-/* ═══════════════ NORMALIZATION ═══════════════ */
-function nSrv(s) {
-  if (!s) return "Sin servicio";
-  const l = s.toLowerCase();
-  if (l.includes("diagnóstico") || l.includes("diagnostico")) {
-    if (l.includes("cv")) return "Diagnóstico CV";
-    if (l.includes("linkedin")) return "Diagnóstico LinkedIn";
-    if (l.includes("bolsa")) return "Diagnóstico Bolsa de Trabajo";
-    return "Diagnóstico";
-  }
-  if (l.includes("cv")) return "Asesoría CV";
-  if (l.includes("linkedin")) return "Asesoría LinkedIn";
-  if (l.includes("bolsa")) return "Asesoría Bolsa de Trabajo";
-  if (l.includes("entrevista") && l.includes("español")) return "Entrevista Español";
-  if (l.includes("entrevista") && (l.includes("inglés") || l.includes("ingl"))) return "Entrevista Inglés";
-  if (l.includes("individual")) return "Asesoría Individual";
-  if (l.includes("carta") || l.includes("oferta")) return "Carta Oferta";
-  if (l.includes("plan de vida")) return "Plan de Vida y Carrera";
-  if (l.includes("cover letter")) return "Cover Letter";
-  if (l.includes("portafolio")) return "Portafolio";
-  return s.trim();
-}
-function nEsc(s) {
-  if (!s) return "Sin escuela";
-  const l = s.toLowerCase();
-  if (l.includes("ingeniería") || l.includes("ingenieria")) return "Ingeniería y Ciencias";
-  if (l.includes("negocio")) return "Negocios";
-  if (l.includes("humanidades")) return "Humanidades y Educación";
-  if (l.includes("sociales")) return "Ciencias Sociales y Gobierno";
-  if (l.includes("arquitectura")) return "Arquitectura, Arte y Diseño";
-  if (l.includes("medicina")) return "Medicina y Ciencias de la Salud";
-  return s.trim();
-}
-function nInt(s) {
-  if (!s) return "Sin interés";
-  const l = s.toLowerCase();
-  if (l.includes("empleo") && l.includes("internacional")) return "Empleo Internacional";
-  if (l.startsWith("empleo")) return "Empleo";
-  if (l.includes("prácticas") || l.includes("practicas")) return "Prácticas Profesionales";
-  if (l.includes("estancia")) return "Estancia Profesional";
-  if (l.includes("on campus")) return "On Campus Intern";
-  if (l.includes("posgrado")) return "Posgrado";
-  if (l.includes("programa internacional")) return "Programa Internacional";
-  if (l.includes("grupos")) return "Grupos Estudiantiles";
-  return s.trim();
-}
-function nMod(s) {
-  if (!s) return "Sin modalidad";
-  const l = s.trim().toLowerCase();
-  if (l.startsWith("v")) return "Virtual";
-  if (l.startsWith("p")) return "Presencial";
-  return s.trim();
-}
-
-/* ═══════════════ SEARCH UTILITIES ═══════════════ */
+/* ═══ HELPERS ═══ */
 function norm(s) {
   return String(s ?? "").toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "");
 }
-
 function useDebounce(value, delay = 200) {
   const [dv, setDv] = useState(value);
   useEffect(() => {
@@ -84,222 +33,146 @@ function useDebounce(value, delay = 200) {
   }, [value, delay]);
   return dv;
 }
-
-function buildAccentRegex(q) {
-  if (!q) return null;
-  const map = { a:"[aáàäâã]", e:"[eéèëê]", i:"[iíìïî]", o:"[oóòöôõ]", u:"[uúùüû]", n:"[nñ]" };
-  try {
-    const escaped = q.toLowerCase().split("").map(c => map[c] || c.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("");
-    return new RegExp(escaped, "gi");
-  } catch { return null; }
-}
-
-/* ═══════════════ EXCEL DATE PARSING ═══════════════ */
-function parseDate(v) {
-  if (!v) return null;
-  if (v instanceof Date) return isNaN(v) ? null : v;
-  if (typeof v === "number") {
-    const d = new Date(Math.round((v - 25569) * 86400000));
-    return isNaN(d) ? null : d;
-  }
-  const s = String(v).trim();
-  const d = new Date(s);
-  return isNaN(d) ? null : d;
-}
-function weekNum(d) {
-  if (!d) return 0;
-  const jan1 = new Date(d.getFullYear(), 0, 1);
-  return Math.ceil((((d - jan1) / 86400000) + jan1.getDay() + 1) / 7);
-}
 function fmtDate(d) {
   if (!d) return "—";
-  return d.toLocaleDateString("es-MX", { day:"2-digit", month:"short", year:"numeric" });
+  return new Date(d + "T12:00:00").toLocaleDateString("es-MX", { day: "2-digit", month: "short", year: "numeric" });
 }
-
-/* parseExcel movido a src/parseWorker.js — ver handleFile en CRM() */
-
-/* ═══════════════ UTILITIES ═══════════════ */
+function todayISO() {
+  return new Date().toISOString().slice(0, 10);
+}
 function countBy(arr, key) {
   const map = {};
-  arr.forEach(r => { const v = r[key] || "N/A"; map[v] = (map[v] || 0) + 1; });
+  arr.forEach((r) => { const v = r[key] || "N/A"; map[v] = (map[v] || 0) + 1; });
   return Object.entries(map).sort((a, b) => b[1] - a[1]).map(([name, value]) => ({ name, value }));
 }
-
 function dlXl(rows, filename) {
   const ws = XLSX.utils.json_to_sheet(rows);
   const maxW = {};
-  [Object.keys(rows[0] || {}), ...rows.map(r => Object.values(r).map(String))].forEach(row => {
+  [Object.keys(rows[0] || {}), ...rows.map((r) => Object.values(r).map(String))].forEach((row) => {
     row.forEach((c, i) => { maxW[i] = Math.max(maxW[i] || 8, String(c).length + 2); });
   });
-  ws["!cols"] = Object.values(maxW).map(w => ({ wch: Math.min(w, 40) }));
+  ws["!cols"] = Object.values(maxW).map((w) => ({ wch: Math.min(w, 40) }));
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, "Datos");
   XLSX.writeFile(wb, filename);
 }
-
-function dlPng(svgEl, filename) {
-  if (!svgEl) return;
-  const svg = svgEl.cloneNode(true);
-  svg.setAttribute("xmlns", "http://www.w3.org/2000/svg");
-  const xml = new XMLSerializer().serializeToString(svg);
-  const blob = new Blob([xml], { type: "image/svg+xml" });
-  const url = URL.createObjectURL(blob);
-  const img = new Image();
-  img.onload = () => {
-    const canvas = document.createElement("canvas");
-    canvas.width = img.width * 2;
-    canvas.height = img.height * 2;
-    const ctx = canvas.getContext("2d");
-    ctx.fillStyle = "#0b1120";
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
-    ctx.scale(2, 2);
-    ctx.drawImage(img, 0, 0);
-    canvas.toBlob(b => {
-      const a = document.createElement("a");
-      a.href = URL.createObjectURL(b);
-      a.download = filename;
-      a.click();
-    }, "image/png");
-    URL.revokeObjectURL(url);
-  };
-  img.src = url;
+function isCAGS(r) {
+  return r.semestre === "8" || norm(r.cag) === norm("Sí");
+}
+function isDIC25(r) {
+  return norm(r.exatec || "").includes("diciembre") || norm(r.exatec || "").includes("dic");
 }
 
-/* ═══════════════ STYLES ═══════════════ */
+/* ═══ STYLES ═══ */
 const S = {
-  card: { background:"rgba(255,255,255,0.04)", border:"1px solid rgba(255,255,255,0.08)", borderRadius:18, padding:24, marginBottom:16 },
-  kpi: (color) => ({ background:"rgba(255,255,255,0.04)", border:"1px solid rgba(255,255,255,0.08)", borderRadius:16, padding:"20px 24px", borderLeft:`4px solid ${color}`, cursor:"default", transition:"all .2s" }),
-  btn: (color="#6366f1") => ({ background:`${color}2e`, color, border:"none", borderRadius:10, padding:"8px 16px", fontSize:13, fontWeight:600, cursor:"pointer", fontFamily:"'Plus Jakarta Sans'", transition:"all .2s" }),
-  badge: (color="#6366f1") => ({ display:"inline-block", background:`${color}22`, color, borderRadius:20, padding:"3px 10px", fontSize:11, fontWeight:600 }),
-  input: { background:"#0a1525", border:"1px solid rgba(255,255,255,0.1)", borderRadius:10, padding:"8px 14px", color:"#e8e9ed", fontSize:13, fontFamily:"'Plus Jakarta Sans'", outline:"none", width:"100%" },
-  select: { background:"#0a1525", border:"1px solid rgba(255,255,255,0.1)", borderRadius:10, padding:"8px 14px", color:"#e8e9ed", fontSize:13, fontFamily:"'Plus Jakarta Sans'", outline:"none" },
-  mono: { fontFamily:"'JetBrains Mono', monospace" },
-  dim: { color:"#8e92a6", fontSize:12 },
-  h2: { fontSize:18, fontWeight:700, marginBottom:16 },
-  h3: { fontSize:15, fontWeight:600, marginBottom:12, color:"#a5b4fc" },
-  grid: (cols) => ({ display:"grid", gridTemplateColumns:`repeat(${cols}, 1fr)`, gap:16 }),
-  flex: { display:"flex", alignItems:"center", gap:8 },
-  overlay: { position:"fixed", inset:0, background:"rgba(0,0,0,0.6)", backdropFilter:"blur(6px)", display:"flex", alignItems:"center", justifyContent:"center", zIndex:1000 },
-  modal: { background:"#0f1628", borderRadius:22, border:"1px solid rgba(255,255,255,0.1)", padding:32, maxWidth:900, width:"90vw", maxHeight:"85vh", overflowY:"auto", position:"relative" },
+  card: { background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 18, padding: 24, marginBottom: 16 },
+  kpi: (color) => ({ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 16, padding: "20px 24px", borderLeft: `4px solid ${color}`, transition: "all .2s" }),
+  btn: (color = "#6366f1") => ({ background: `${color}2e`, color, border: "none", borderRadius: 10, padding: "8px 16px", fontSize: 13, fontWeight: 600, cursor: "pointer", fontFamily: "'Plus Jakarta Sans'", transition: "all .2s" }),
+  badge: (color = "#6366f1") => ({ display: "inline-block", background: `${color}22`, color, borderRadius: 20, padding: "3px 10px", fontSize: 11, fontWeight: 600 }),
+  input: { background: "#0a1525", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 10, padding: "8px 14px", color: "#e8e9ed", fontSize: 13, fontFamily: "'Plus Jakarta Sans'", outline: "none", width: "100%" },
+  select: { background: "#0a1525", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 10, padding: "8px 14px", color: "#e8e9ed", fontSize: 13, fontFamily: "'Plus Jakarta Sans'", outline: "none" },
+  mono: { fontFamily: "'JetBrains Mono', monospace" },
+  dim: { color: "#8e92a6", fontSize: 12 },
+  h2: { fontSize: 18, fontWeight: 700, marginBottom: 16 },
+  h3: { fontSize: 15, fontWeight: 600, marginBottom: 12, color: "#a5b4fc" },
+  grid: (cols) => ({ display: "grid", gridTemplateColumns: `repeat(${cols}, 1fr)`, gap: 16 }),
+  overlay: { position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)", backdropFilter: "blur(6px)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000 },
+  modal: { background: "#0f1628", borderRadius: 22, border: "1px solid rgba(255,255,255,0.1)", padding: 32, maxWidth: 900, width: "90vw", maxHeight: "85vh", overflowY: "auto", position: "relative" },
 };
 
-/* ═══════════════ REUSABLE COMPONENTS ═══════════════ */
+/* ═══ REUSABLE ═══ */
 function Cd({ children, style }) { return <div style={{ ...S.card, ...style }}>{children}</div>; }
-function Bt({ children, color, onClick, style }) {
-  return <button style={{ ...S.btn(color), ...style }} onClick={onClick}
-    onMouseEnter={e => e.target.style.opacity=0.8} onMouseLeave={e => e.target.style.opacity=1}
-  >{children}</button>;
+function Bt({ children, color, onClick, style, disabled }) {
+  return (
+    <button style={{ ...S.btn(color), ...style, opacity: disabled ? 0.4 : 1, pointerEvents: disabled ? "none" : "auto" }}
+      onClick={onClick} disabled={disabled}
+      onMouseEnter={(e) => { if (!disabled) e.target.style.opacity = 0.8; }}
+      onMouseLeave={(e) => { if (!disabled) e.target.style.opacity = 1; }}>
+      {children}
+    </button>
+  );
 }
-
 function KPI({ label, value, sub, color = "#6366f1" }) {
   return (
-    <div style={S.kpi(color)} onMouseEnter={e => { e.currentTarget.style.transform="translateY(-3px)"; e.currentTarget.style.boxShadow=`0 8px 24px ${color}22`; }}
-      onMouseLeave={e => { e.currentTarget.style.transform="translateY(0)"; e.currentTarget.style.boxShadow="none"; }}>
-      <div style={{ color:"#8e92a6", fontSize:11, fontWeight:600, textTransform:"uppercase", letterSpacing:1, marginBottom:6 }}>{label}</div>
-      <div style={{ ...S.mono, fontSize:28, fontWeight:700, color }}>{value}</div>
-      {sub && <div style={{ color:"#6b6f82", fontSize:11, marginTop:4 }}>{sub}</div>}
+    <div style={S.kpi(color)}
+      onMouseEnter={(e) => { e.currentTarget.style.transform = "translateY(-3px)"; e.currentTarget.style.boxShadow = `0 8px 24px ${color}22`; }}
+      onMouseLeave={(e) => { e.currentTarget.style.transform = "translateY(0)"; e.currentTarget.style.boxShadow = "none"; }}>
+      <div style={{ color: "#8e92a6", fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: 1, marginBottom: 6 }}>{label}</div>
+      <div style={{ ...S.mono, fontSize: 28, fontWeight: 700, color }}>{value}</div>
+      {sub && <div style={{ color: "#6b6f82", fontSize: 11, marginTop: 4 }}>{sub}</div>}
     </div>
   );
 }
-
 function SB({ items, total }) {
   return (
-    <div>
-      {items.map(({ name, value, color }, i) => {
-        const pct = total ? ((value / total) * 100).toFixed(1) : 0;
-        return (
-          <div key={i} style={{ marginBottom:10 }}>
-            <div style={{ display:"flex", justifyContent:"space-between", marginBottom:4 }}>
-              <span style={{ fontSize:12, color:"#e8e9ed" }}>{name}</span>
-              <span style={{ ...S.mono, fontSize:12, color:"#8e92a6" }}>{value} ({pct}%)</span>
-            </div>
-            <div style={{ height:5, background:"rgba(255,255,255,0.06)", borderRadius:3, overflow:"hidden" }}>
-              <div style={{ height:"100%", width:`${pct}%`, borderRadius:3, background:`linear-gradient(90deg, ${color || CHART_COLORS[i % CHART_COLORS.length]}, ${color || CHART_COLORS[i % CHART_COLORS.length]}aa)`, transition:"width .5s" }} />
-            </div>
+    <div>{items.map(({ name, value, color }, i) => {
+      const pct = total ? ((value / total) * 100).toFixed(1) : 0;
+      return (
+        <div key={i} style={{ marginBottom: 10 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
+            <span style={{ fontSize: 12, color: "#e8e9ed" }}>{name}</span>
+            <span style={{ ...S.mono, fontSize: 12, color: "#8e92a6" }}>{value} ({pct}%)</span>
           </div>
-        );
-      })}
-    </div>
+          <div style={{ height: 5, background: "rgba(255,255,255,0.06)", borderRadius: 3, overflow: "hidden" }}>
+            <div style={{ height: "100%", width: `${pct}%`, borderRadius: 3, background: color || CHART_COLORS[i % CHART_COLORS.length], transition: "width .5s" }} />
+          </div>
+        </div>
+      );
+    })}</div>
   );
 }
-
-function ChartCard({ title, children, chartRef, filename }) {
-  return (
-    <Cd>
-      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:16 }}>
-        <div style={S.h3}>{title}</div>
-        {chartRef && <Bt color="#8e92a6" onClick={() => { const svg = chartRef.current?.querySelector("svg"); if(svg) dlPng(svg, filename || "chart.png"); }} style={{ padding:"4px 10px", fontSize:11 }}>📷 PNG</Bt>}
-      </div>
-      {children}
-    </Cd>
-  );
-}
-
-function Highlight({ text, query }) {
-  if (!query || !text) return <span>{String(text ?? "")}</span>;
-  const t = String(text);
-  const regex = buildAccentRegex(query);
-  if (!regex) return <span>{t}</span>;
-  const parts = [];
-  let lastIdx = 0, match;
-  while ((match = regex.exec(t)) !== null) {
-    if (match[0].length === 0) { lastIdx++; continue; }
-    if (match.index > lastIdx) parts.push({ t: t.slice(lastIdx, match.index), m: false });
-    parts.push({ t: match[0], m: true });
-    lastIdx = regex.lastIndex;
-  }
-  if (lastIdx < t.length) parts.push({ t: t.slice(lastIdx), m: false });
-  if (!parts.length) return <span>{t}</span>;
-  return (
-    <span>{parts.map((p, i) => p.m
-      ? <mark key={i} style={{ background:"rgba(99,102,241,0.35)", color:"#e8e9ed", borderRadius:3, padding:"0 2px" }}>{p.t}</mark>
-      : p.t
-    )}</span>
-  );
-}
-
 const TT = ({ active, payload, label }) => {
   if (!active || !payload?.length) return null;
   return (
-    <div style={{ background:"#0f1a2e", border:"1px solid rgba(255,255,255,0.1)", borderRadius:10, padding:"10px 14px", fontSize:12 }}>
-      <div style={{ fontWeight:600, marginBottom:4 }}>{label}</div>
+    <div style={{ background: "#0f1a2e", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 10, padding: "10px 14px", fontSize: 12 }}>
+      <div style={{ fontWeight: 600, marginBottom: 4 }}>{label}</div>
       {payload.map((p, i) => (
-        <div key={i} style={{ color: p.color || p.fill, ...S.mono, fontSize:11 }}>
-          {p.name || p.dataKey}: {p.value}
-        </div>
+        <div key={i} style={{ color: p.color || p.fill, ...S.mono, fontSize: 11 }}>{p.name || p.dataKey}: {p.value}</div>
       ))}
     </div>
   );
 };
 
-/* ═══════════════ MODAL COMPONENTS ═══════════════ */
+/* ═══ SPINNER ═══ */
+function Spinner() {
+  return (
+    <div style={{ display: "flex", alignItems: "center", justifyContent: "center", padding: 60 }}>
+      <div style={{ width: 32, height: 32, border: "3px solid rgba(99,102,241,0.2)", borderTopColor: "#6366f1", borderRadius: "50%", animation: "spin 0.8s linear infinite" }} />
+      <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+    </div>
+  );
+}
+
+/* ═══ MODAL ═══ */
 function Modal({ onClose, children }) {
   return (
     <div style={S.overlay} onClick={onClose}>
-      <div style={S.modal} onClick={e => e.stopPropagation()}>
-        <button onClick={onClose} style={{ position:"absolute", top:16, right:16, background:"none", border:"none", color:"#8e92a6", fontSize:20, cursor:"pointer" }}>✕</button>
+      <div style={S.modal} onClick={(e) => e.stopPropagation()}>
+        <button onClick={onClose} style={{ position: "absolute", top: 16, right: 16, background: "none", border: "none", color: "#8e92a6", fontSize: 20, cursor: "pointer" }}>✕</button>
         {children}
       </div>
     </div>
   );
 }
 
-function StudentModal({ student, records, onClose }) {
-  const sorted = [...records].sort((a, b) => (b.fecha || 0) - (a.fecha || 0));
-  const asist = records.filter(r => r.estatus === "Asistencia").length;
-  const services = [...new Set(records.map(r => r.servicio))];
+/* ═══ STUDENT MODAL ═══ */
+function StudentModal({ matricula, records, onClose }) {
+  const sorted = [...records].sort((a, b) => (b.dia || "") > (a.dia || "") ? 1 : -1);
+  const latest = sorted[0] || {};
+  const asist = records.filter((r) => r.estatus === "Asistencia").length;
+  const services = [...new Set(records.map((r) => r.servicio).filter(Boolean))];
+  const cags = isCAGS(latest);
+  const dic25 = isDIC25(latest);
   return (
     <Modal onClose={onClose}>
-      <div style={{ marginBottom:20 }}>
-        <div style={{ fontSize:20, fontWeight:700 }}>{student.nombre}</div>
-        <div style={{ ...S.mono, color:"#8e92a6", fontSize:13, marginTop:4 }}>{student.matricula}</div>
-        <div style={{ display:"flex", gap:8, marginTop:10, flexWrap:"wrap" }}>
-          <span style={S.badge("#6366f1")}>{student.escuela}</span>
-          <span style={S.badge("#10b981")}>{student.programa}</span>
-          {student.comunidad && student.comunidad !== "Sin comunidad" && <span style={S.badge("#f59e0b")}>{student.comunidad}</span>}
-          {student.interes && student.interes !== "Sin interés" && <span style={S.badge("#ec4899")}>{student.interes}</span>}
-          {student.isCAGS  && <span style={{ ...S.badge("#a855f7"), fontWeight:700 }}>★ CAGS JUN26</span>}
-          {student.isDIC25 && <span style={{ ...S.badge("#22d3ee"), fontWeight:700 }}>✓ DIC25</span>}
+      <div style={{ marginBottom: 20 }}>
+        <div style={{ fontSize: 20, fontWeight: 700 }}>{latest.nombre} {latest.ap} {latest.am}</div>
+        <div style={{ ...S.mono, color: "#8e92a6", fontSize: 13, marginTop: 4 }}>{matricula}</div>
+        <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap" }}>
+          {latest.escuela && <span style={S.badge("#6366f1")}>{latest.escuela}</span>}
+          {latest.programa && <span style={S.badge("#10b981")}>{latest.programa}</span>}
+          {cags && <span style={{ ...S.badge("#a855f7"), fontWeight: 700 }}>★ CAGS JUN26</span>}
+          {dic25 && <span style={{ ...S.badge("#22d3ee"), fontWeight: 700 }}>✓ DIC25</span>}
         </div>
       </div>
       <div style={S.grid(4)}>
@@ -308,496 +181,865 @@ function StudentModal({ student, records, onClose }) {
         <KPI label="Servicios" value={services.length} color="#f59e0b" />
         <KPI label="Tasa asist." value={records.length ? `${((asist / records.length) * 100).toFixed(0)}%` : "—"} color="#8b5cf6" />
       </div>
-      <div style={{ marginTop:20 }}>
+      <div style={{ marginTop: 20 }}>
         <div style={S.h3}>Servicios utilizados</div>
-        <div style={{ display:"flex", gap:6, flexWrap:"wrap" }}>
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
           {services.map((s, i) => <span key={i} style={S.badge(CHART_COLORS[i % CHART_COLORS.length])}>{s}</span>)}
         </div>
       </div>
-      <div style={{ marginTop:20 }}>
+      <div style={{ marginTop: 20 }}>
         <div style={S.h3}>Timeline</div>
         {sorted.map((r, i) => (
-          <div key={i} style={{ display:"flex", gap:12, padding:"10px 0", borderBottom:"1px solid rgba(255,255,255,0.05)" }}>
-            <div style={{ ...S.mono, fontSize:11, color:"#6b6f82", minWidth:80 }}>{fmtDate(r.fecha)}</div>
-            <div style={{ fontSize:12 }}>{r.servicio}</div>
-            <span style={{ ...S.badge(STATUS_COLORS[r.estatus] || "#6366f1"), marginLeft:"auto" }}>{r.estatus}</span>
+          <div key={i} style={{ display: "flex", gap: 12, padding: "10px 0", borderBottom: "1px solid rgba(255,255,255,0.05)", alignItems: "center" }}>
+            <div style={{ ...S.mono, fontSize: 11, color: "#6b6f82", minWidth: 90 }}>{fmtDate(r.dia)}</div>
+            <div style={{ fontSize: 12, flex: 1 }}>{r.servicio || "—"}</div>
+            <div style={{ fontSize: 11, color: "#8e92a6" }}>{r.atiende}</div>
+            <span style={S.badge(STATUS_COLORS[r.estatus] || "#6366f1")}>{r.estatus}</span>
           </div>
         ))}
       </div>
-      <div style={{ marginTop:16 }}>
-        <Bt color="#6366f1" onClick={() => dlXl(records.map(r => ({ Fecha:fmtDate(r.fecha), Servicio:r.servicio, Asesor:r.asesor, Estatus:r.estatus, Modalidad:r.modalidad })), `historial_${student.matricula}.xlsx`)}>
-          ↓ Descargar historial
-        </Bt>
-      </div>
     </Modal>
   );
 }
 
-function AsesorModal({ asesor, records, onClose }) {
-  const asist = records.filter(r => r.estatus === "Asistencia").length;
-  const faltas = records.filter(r => r.estatus === "Falta").length;
-  const express = records.filter(r => r.estatus === "Express").length;
-  const weeks = new Set(records.map(r => r.semana));
-  const last30 = [...records].sort((a, b) => (b.fecha || 0) - (a.fecha || 0)).slice(0, 30);
-  const base = records.length - express;
+/* ═══ TAB HOME ═══ */
+function TabHome({ data, onStatusChange }) {
+  const today = todayISO();
+  const hoy = useMemo(() =>
+    data.filter((r) => r.dia === today).sort((a, b) => (a.hora || "") < (b.hora || "") ? -1 : 1),
+    [data, today]
+  );
 
-  const [aSearch, setASearch] = useState("");
-  const [aEscuela, setAEscuela] = useState("");
-  const [aEstatus, setAEstatus] = useState("");
-  const [aInteres, setAInteres] = useState("");
-  const [aPrograma, setAPrograma] = useState("");
-  const [aServicio, setAServicio] = useState("");
-  const [aComunidad, setAComunidad] = useState("");
-  const [aCAGS, setACAGS] = useState(false);
-  const [aDIC25, setADIC25] = useState(false);
-  const [selectedStudent, setSelectedStudent] = useState(null);
-  const dASearch = useDebounce(aSearch, 200);
+  const dateStr = new Date().toLocaleDateString("es-MX", { weekday: "long", day: "numeric", month: "long" });
+  const capitalize = (s) => s.charAt(0).toUpperCase() + s.slice(1);
 
-  const alumnosList = useMemo(() => {
-    const m = {};
-    records.forEach(r => {
-      if (!m[r.matricula]) m[r.matricula] = {
-        matricula:r.matricula, nombre:r.nombre, sesiones:0, asistencias:0,
-        servicios:new Set(), ultimaFecha:null,
-        escuela:r.escuela, programa:r.programa, interes:r.interes, comunidad:r.comunidad,
-        isCAGS:false, isDIC25:false, allEstatus:new Set(), records:[],
-      };
-      const s = m[r.matricula];
-      s.sesiones++;
-      s.records.push(r);
-      if (r.estatus === "Asistencia") s.asistencias++;
-      s.servicios.add(r.servicio);
-      s.allEstatus.add(r.estatus);
-      if (r.isCAGS) s.isCAGS = true;
-      if (r.isDIC25) s.isDIC25 = true;
-      if (!s.ultimaFecha || (r.fecha && r.fecha > s.ultimaFecha)) {
-        s.ultimaFecha = r.fecha;
-        s.escuela = r.escuela; s.programa = r.programa;
-        s.interes = r.interes; s.comunidad = r.comunidad;
-      }
-    });
-    return Object.values(m).sort((a, b) => b.sesiones - a.sesiones);
-  }, [records]);
-
-  const aEscuelas   = useMemo(() => [...new Set(alumnosList.map(s => s.escuela))].sort(),   [alumnosList]);
-  const aEstatuses  = useMemo(() => [...new Set(records.map(r => r.estatus))].sort(),        [records]);
-  const aIntereses  = useMemo(() => [...new Set(alumnosList.map(s => s.interes))].sort(),   [alumnosList]);
-  const aProgramas  = useMemo(() => [...new Set(alumnosList.map(s => s.programa))].sort(),  [alumnosList]);
-  const aServicios  = useMemo(() => [...new Set(records.map(r => r.servicio))].sort(),       [records]);
-  const aComunidades = useMemo(() => [...new Set(alumnosList.map(s => s.comunidad))].sort(), [alumnosList]);
-
-  const alumnosFiltrados = useMemo(() => {
-    let f = alumnosList;
-    if (dASearch) { const q = norm(dASearch); f = f.filter(s => norm(s.nombre).includes(q) || norm(s.matricula).includes(q)); }
-    if (aEscuela)   f = f.filter(s => s.escuela   === aEscuela);
-    if (aEstatus)   f = f.filter(s => s.allEstatus.has(aEstatus));
-    if (aInteres)   f = f.filter(s => s.interes   === aInteres);
-    if (aPrograma)  f = f.filter(s => s.programa  === aPrograma);
-    if (aServicio)  f = f.filter(s => s.servicios.has(aServicio));
-    if (aComunidad) f = f.filter(s => s.comunidad === aComunidad);
-    if (aCAGS)  f = f.filter(s => s.isCAGS);
-    if (aDIC25) f = f.filter(s => s.isDIC25);
-    return f;
-  }, [alumnosList, dASearch, aEscuela, aEstatus, aInteres, aPrograma, aServicio, aComunidad, aCAGS, aDIC25]);
-
-  const clearAFiltros = () => { setASearch(""); setAEscuela(""); setAEstatus(""); setAInteres(""); setAPrograma(""); setAServicio(""); setAComunidad(""); setACAGS(false); setADIC25(false); };
+  const stats = useMemo(() => ({
+    total: hoy.length,
+    asistencia: hoy.filter((r) => r.estatus === "Asistencia").length,
+    falta: hoy.filter((r) => r.estatus === "Falta").length,
+    cancelacion: hoy.filter((r) => r.estatus === "Cancelación").length,
+    express: hoy.filter((r) => r.estatus === "Express").length,
+    pendientes: hoy.filter((r) => r.estatus === "Agendado").length,
+  }), [hoy]);
 
   return (
-    <>
-    {selectedStudent && (
-      <StudentModal
-        student={selectedStudent}
-        records={selectedStudent.records}
-        onClose={() => setSelectedStudent(null)}
-      />
-    )}
-    <Modal onClose={onClose}>
-      <div style={{ fontSize:20, fontWeight:700, marginBottom:20 }}>{asesor}</div>
-      <div style={S.grid(5)}>
-        <KPI label="Total" value={records.length} color="#6366f1" />
-        <KPI label="Asistencias" value={asist} color="#10b981" sub={base ? `${((asist / base) * 100).toFixed(1)}% de tasa` : "—"} />
-        <KPI label="Faltas" value={faltas} color="#ef4444" sub={base ? `${((faltas / base) * 100).toFixed(1)}% de tasa` : "—"} />
-        <KPI label="Prom/semana" value={weeks.size ? (records.length / weeks.size).toFixed(1) : "—"} color="#f59e0b" />
-        <KPI label="Alumnos únicos" value={alumnosList.length} color="#8b5cf6" />
-      </div>
-      <div style={{ ...S.grid(2), marginTop:20 }}>
-        <KPI label="CAGS atendidos" value={new Set(records.filter(r => r.isCAGS).map(r => r.matricula)).size} color="#a855f7" sub="Candidatos JUN 2026" />
-        <KPI label="DIC 2025 atendidos" value={new Set(records.filter(r => r.isDIC25).map(r => r.matricula)).size} color="#22d3ee" sub="Generación graduada" />
-      </div>
-      <div style={{ marginTop:20 }}>
-        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:8 }}>
-          <div style={S.h3}>Alumnos atendidos ({alumnosFiltrados.length}{alumnosFiltrados.length !== alumnosList.length ? ` de ${alumnosList.length}` : ""})</div>
-        </div>
-        <div style={{ display:"flex", gap:6, flexWrap:"wrap", marginBottom:6 }}>
-          <input style={{ ...S.input, maxWidth:200, padding:"6px 10px" }} placeholder="Buscar alumno..." value={aSearch} onChange={e => setASearch(e.target.value)} />
-          <select style={{ ...S.select, fontSize:11 }} value={aEscuela} onChange={e => setAEscuela(e.target.value)}>
-            <option value="">Escuela</option>
-            {aEscuelas.map(v => <option key={v} value={v}>{v}</option>)}
-          </select>
-          <select style={{ ...S.select, fontSize:11 }} value={aEstatus} onChange={e => setAEstatus(e.target.value)}>
-            <option value="">Estatus</option>
-            {aEstatuses.map(v => <option key={v} value={v}>{v}</option>)}
-          </select>
-          <select style={{ ...S.select, fontSize:11 }} value={aInteres} onChange={e => setAInteres(e.target.value)}>
-            <option value="">Interés</option>
-            {aIntereses.map(v => <option key={v} value={v}>{v}</option>)}
-          </select>
-          <select style={{ ...S.select, fontSize:11 }} value={aPrograma} onChange={e => setAPrograma(e.target.value)}>
-            <option value="">Programa</option>
-            {aProgramas.map(v => <option key={v} value={v}>{v}</option>)}
-          </select>
-          <select style={{ ...S.select, fontSize:11 }} value={aServicio} onChange={e => setAServicio(e.target.value)}>
-            <option value="">Servicio</option>
-            {aServicios.map(v => <option key={v} value={v}>{v}</option>)}
-          </select>
-          <select style={{ ...S.select, fontSize:11 }} value={aComunidad} onChange={e => setAComunidad(e.target.value)}>
-            <option value="">Comunidad</option>
-            {aComunidades.map(v => <option key={v} value={v}>{v}</option>)}
-          </select>
-          <button onClick={() => { setACAGS(v => !v); setADIC25(false); }}
-            style={{ ...S.btn(aCAGS ? "#a855f7" : "#8e92a6"), fontSize:11, padding:"6px 10px", opacity: aDIC25 ? 0.4 : 1 }}>
-            ★ CAGS
-          </button>
-          <button onClick={() => { setADIC25(v => !v); setACAGS(false); }}
-            style={{ ...S.btn(aDIC25 ? "#22d3ee" : "#8e92a6"), fontSize:11, padding:"6px 10px", opacity: aCAGS ? 0.4 : 1 }}>
-            ✓ DIC25
-          </button>
-          <Bt color="#8e92a6" onClick={clearAFiltros} style={{ fontSize:11, padding:"6px 10px" }}>Limpiar</Bt>
-        </div>
-        <div style={{ overflowX:"auto", maxHeight:280, overflowY:"auto" }}>
-          <table style={{ width:"100%", borderCollapse:"collapse", fontSize:12 }}>
-            <thead style={{ position:"sticky", top:0, background:"#0f1628", zIndex:1 }}>
-              <tr style={{ borderBottom:"1px solid rgba(255,255,255,0.08)" }}>
-                {["Alumno","Matrícula","Sesiones","Asistencias","Servicios","Última visita"].map(h => (
-                  <th key={h} style={{ textAlign:"left", padding:"8px 10px", fontSize:10, textTransform:"uppercase", letterSpacing:1, color:"#6b6f82", fontWeight:600, whiteSpace:"nowrap" }}>{h}</th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>{alumnosFiltrados.map((a, i) => (
-              <tr key={i} style={{ borderBottom:"1px solid rgba(255,255,255,0.04)", cursor:"pointer" }}
-                onClick={() => setSelectedStudent(a)}
-                onMouseEnter={e => e.currentTarget.style.background="rgba(99,102,241,0.06)"}
-                onMouseLeave={e => e.currentTarget.style.background="transparent"}>
-                <td style={{ padding:"8px 10px", fontWeight:500 }}>
-                  <Highlight text={a.nombre} query={dASearch} />
-                  {a.isCAGS  && <span style={{ ...S.badge("#a855f7"), marginLeft:6, fontSize:9 }}>CAGS</span>}
-                  {a.isDIC25 && <span style={{ ...S.badge("#22d3ee"), marginLeft:6, fontSize:9 }}>DIC25</span>}
-                </td>
-                <td style={{ padding:"8px 10px", ...S.mono, fontSize:11, color:"#a5b4fc" }}><Highlight text={a.matricula} query={dASearch} /></td>
-                <td style={{ padding:"8px 10px", textAlign:"center" }}><span style={S.badge("#6366f1")}>{a.sesiones}</span></td>
-                <td style={{ padding:"8px 10px", textAlign:"center" }}><span style={S.badge("#10b981")}>{a.asistencias}</span></td>
-                <td style={{ padding:"8px 10px", fontSize:11, color:"#8e92a6", maxWidth:160, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{[...a.servicios].join(", ")}</td>
-                <td style={{ padding:"8px 10px", ...S.mono, fontSize:11, color:"#6b6f82" }}>{fmtDate(a.ultimaFecha)}</td>
-              </tr>
-            ))}</tbody>
-          </table>
-          {alumnosFiltrados.length === 0 && (
-            <div style={{ textAlign:"center", padding:24, color:"#6b6f82", fontSize:12 }}>Sin resultados con los filtros aplicados</div>
-          )}
-        </div>
+    <div>
+      {/* Header del día */}
+      <div style={{ marginBottom: 24 }}>
+        <h1 style={{ fontSize: 26, fontWeight: 800, margin: 0 }}>
+          {capitalize(dateStr)}
+        </h1>
+        <p style={{ color: "#8e92a6", fontSize: 14, margin: "4px 0 0" }}>
+          {hoy.length === 0 ? "Sin asesorías registradas para hoy" : `${hoy.length} asesoría${hoy.length !== 1 ? "s" : ""} agendada${hoy.length !== 1 ? "s" : ""}`}
+        </p>
       </div>
 
-      <div style={{ marginTop:20 }}>
-        <div style={S.h3}>Últimas 30 asesorías</div>
-        <div style={{ overflowX:"auto" }}>
-          <table style={{ width:"100%", borderCollapse:"collapse", fontSize:12 }}>
-            <thead><tr style={{ borderBottom:"1px solid rgba(255,255,255,0.08)" }}>
-              {["Fecha","Alumno","Servicio","Estatus","Modalidad"].map(h => (
-                <th key={h} style={{ textAlign:"left", padding:"8px 10px", fontSize:10, textTransform:"uppercase", letterSpacing:1, color:"#6b6f82", fontWeight:600 }}>{h}</th>
-              ))}
-            </tr></thead>
-            <tbody>{last30.map((r, i) => (
-              <tr key={i} style={{ borderBottom:"1px solid rgba(255,255,255,0.04)" }}
-                onMouseEnter={e => e.currentTarget.style.background="rgba(99,102,241,0.06)"}
-                onMouseLeave={e => e.currentTarget.style.background="transparent"}>
-                <td style={{ padding:"8px 10px", ...S.mono, color:"#6b6f82", fontSize:11 }}>{fmtDate(r.fecha)}</td>
-                <td style={{ padding:"8px 10px" }}>{r.nombre}</td>
-                <td style={{ padding:"8px 10px" }}>{r.servicio}</td>
-                <td style={{ padding:"8px 10px" }}><span style={S.badge(STATUS_COLORS[r.estatus]||"#6366f1")}>{r.estatus}</span></td>
-                <td style={{ padding:"8px 10px" }}>{r.modalidad}</td>
-              </tr>
-            ))}</tbody>
-          </table>
+      {/* KPIs del día */}
+      {hoy.length > 0 && (
+        <div style={{ ...S.grid(5), marginBottom: 24 }}>
+          <KPI label="Total hoy" value={stats.total} color="#6366f1" />
+          <KPI label="Pendientes" value={stats.pendientes} color="#8e92a6" />
+          <KPI label="Asistencia" value={stats.asistencia} color="#10b981" />
+          <KPI label="Falta" value={stats.falta} color="#ef4444" />
+          <KPI label="Cancelación" value={stats.cancelacion} color="#8b5cf6" />
         </div>
-      </div>
-      <div style={{ marginTop:16, display:"flex", gap:10 }}>
-        <Bt color="#6366f1" onClick={() => dlXl(records.map(r => ({ Fecha:fmtDate(r.fecha), Matrícula:r.matricula, Alumno:r.nombre, Servicio:r.servicio, Estatus:r.estatus, Escuela:r.escuela, Programa:r.programa, Modalidad:r.modalidad })), `asesor_${asesor}.xlsx`)}>↓ Descargar datos</Bt>
-        <Bt color="#10b981" onClick={() => dlXl(alumnosFiltrados.map(a => ({ Matrícula:a.matricula, Alumno:a.nombre, Sesiones:a.sesiones, Asistencias:a.asistencias, Servicios:[...a.servicios].join(", "), CAGS:a.isCAGS?"Sí":"No", DIC25:a.isDIC25?"Sí":"No", "Última visita":fmtDate(a.ultimaFecha) })), `alumnos_${asesor}.xlsx`)}>↓ Lista alumnos</Bt>
-      </div>
-    </Modal>
-    </>
+      )}
+
+      {/* Lista de asesorías de hoy */}
+      {hoy.length === 0 ? (
+        <Cd>
+          <div style={{ textAlign: "center", padding: 40 }}>
+            <div style={{ fontSize: 40, marginBottom: 12, opacity: 0.3 }}>📅</div>
+            <div style={{ color: "#8e92a6", fontSize: 14 }}>No hay asesorías registradas para hoy.</div>
+            <div style={{ color: "#6b6f82", fontSize: 12, marginTop: 8 }}>Ve a la pestaña Asesorías para agregar nuevas.</div>
+          </div>
+        </Cd>
+      ) : (
+        <Cd style={{ padding: 0, overflow: "hidden" }}>
+          <div style={{ padding: "16px 20px", borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
+            <span style={{ fontWeight: 700, fontSize: 14, color: "#a5b4fc" }}>Asesorías de hoy</span>
+          </div>
+          {hoy.map((r) => (
+            <HomeRow key={r.id} record={r} onStatusChange={onStatusChange} />
+          ))}
+        </Cd>
+      )}
+
+      {/* Últimas asesorías (no de hoy) */}
+      <RecentSection data={data} today={today} />
+    </div>
   );
 }
 
-/* ═══════════════ TAB: DASHBOARD ═══════════════ */
-function TabDashboard({ data }) {
-  const total = data.length;
-  const asist = data.filter(r => r.estatus === "Asistencia").length;
-  const faltas = data.filter(r => r.estatus === "Falta").length;
-  const express = data.filter(r => r.estatus === "Express").length;
-  const cancel = data.filter(r => r.estatus === "Cancelación").length;
-  const uniq = new Set(data.map(r => r.matricula)).size;
-  const base = total - express;
-  const tasaAsist = base ? ((asist / base) * 100).toFixed(1) : 0;
-  const tasaFalta = base ? ((faltas / base) * 100).toFixed(1) : 0;
+function HomeRow({ record: r, onStatusChange }) {
+  const [saving, setSaving] = useState(false);
+  const current = r.estatus;
 
-  const cagsUniq = useMemo(() => {
-    const seen = new Set();
-    data.forEach(r => { if (r.isCAGS) seen.add(r.matricula); });
-    return seen.size;
-  }, [data]);
-  const dic25Uniq = useMemo(() => {
-    const seen = new Set();
-    data.forEach(r => { if (r.isDIC25) seen.add(r.matricula); });
-    return seen.size;
-  }, [data]);
-
-  const weekData = useMemo(() => {
-    const wm = {};
-    data.forEach(r => { if (r.semana) { wm[r.semana] = (wm[r.semana] || 0) + 1; } });
-    return Object.entries(wm).sort((a, b) => a[0] - b[0]).map(([w, v]) => ({ name:`S${w}`, value:v }));
-  }, [data]);
-
-  const statusData = [
-    { name:"Asistencia", value:asist, color:"#10b981" },
-    { name:"Falta", value:faltas, color:"#ef4444" },
-    { name:"Express", value:express, color:"#f59e0b" },
-    { name:"Cancelación", value:cancel, color:"#8b5cf6" }
-  ];
-  const escData = countBy(data, "escuela");
-  const intData = countBy(data, "interes");
-  const srvData = countBy(data, "servicio");
-  const comData = countBy(data, "comunidad");
-  const modData = countBy(data, "modalidad");
-
-  const ref1=useRef(),ref2=useRef(),ref3=useRef(),ref4=useRef(),ref5=useRef();
-
-  const dlAsist = () => {
-    const rows = data.filter(r => r.estatus === "Asistencia").map(r => ({ Fecha:fmtDate(r.fecha), Matrícula:r.matricula, Nombre:r.nombre, Servicio:r.servicio, Asesor:r.asesor, Escuela:r.escuela, Programa:r.programa }));
-    dlXl(rows, "asistencias_FJ26.xlsx");
+  const handleStatus = async (newStatus) => {
+    if (saving || current === newStatus) return;
+    setSaving(true);
+    await onStatusChange(r.id, newStatus);
+    setSaving(false);
   };
-  const dlReporte = () => {
-    const rows = data.map(r => ({ Fecha:fmtDate(r.fecha), Matrícula:r.matricula, Nombre:r.nombre, Servicio:r.servicio, Asesor:r.asesor, Escuela:r.escuela, Programa:r.programa, Estatus:r.estatus, Interés:r.interes, Modalidad:r.modalidad, Comunidad:r.comunidad, Semestre:r.semestre }));
-    dlXl(rows, "reporte_completo_FJ26.xlsx");
+
+  const nombre = [r.nombre, r.ap, r.am].filter(Boolean).join(" ") || "Sin nombre";
+  const cags = isCAGS(r);
+  const dic25 = isDIC25(r);
+
+  return (
+    <div style={{
+      display: "flex", alignItems: "center", gap: 16, padding: "14px 20px",
+      borderBottom: "1px solid rgba(255,255,255,0.04)",
+      background: current === "Asistencia" ? "rgba(16,185,129,0.04)"
+        : current === "Falta" ? "rgba(239,68,68,0.04)"
+        : current === "Cancelación" ? "rgba(139,92,246,0.04)"
+        : current === "Express" ? "rgba(245,158,11,0.04)"
+        : "transparent",
+      transition: "background .2s",
+    }}
+      onMouseEnter={(e) => { if (current === "Agendado") e.currentTarget.style.background = "rgba(99,102,241,0.05)"; }}
+      onMouseLeave={(e) => { if (current === "Agendado") e.currentTarget.style.background = "transparent"; }}
+    >
+      {/* Hora */}
+      <div style={{ ...S.mono, fontSize: 18, fontWeight: 700, color: "#6366f1", minWidth: 60 }}>
+        {r.hora || "—"}
+      </div>
+
+      {/* Info */}
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontWeight: 600, fontSize: 15, display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+          {nombre}
+          {cags  && <span style={{ ...S.badge("#a855f7"), fontSize: 9 }}>CAGS</span>}
+          {dic25 && <span style={{ ...S.badge("#22d3ee"), fontSize: 9 }}>DIC25</span>}
+        </div>
+        <div style={{ color: "#8e92a6", fontSize: 12, marginTop: 2, display: "flex", gap: 12 }}>
+          <span>{r.atiende || "Sin asesor"}</span>
+          {r.servicio && <span style={{ color: "#6b6f82" }}>· {r.servicio}</span>}
+          {r.modalidad && <span style={{ color: "#6b6f82" }}>· {r.modalidad}</span>}
+        </div>
+      </div>
+
+      {/* Matrícula */}
+      <div style={{ ...S.mono, fontSize: 11, color: "#a5b4fc", minWidth: 100, textAlign: "right" }}>
+        {r.matricula}
+      </div>
+
+      {/* Botones de estatus */}
+      <div style={{ display: "flex", gap: 6, flexShrink: 0 }}>
+        {["Asistencia","Falta","Cancelación","Express"].map((s) => {
+          const col = STATUS_COLORS[s];
+          const active = current === s;
+          return (
+            <button key={s} onClick={() => handleStatus(s)} disabled={saving}
+              style={{
+                background: active ? `${col}33` : "rgba(255,255,255,0.04)",
+                color: active ? col : "#6b6f82",
+                border: `1px solid ${active ? col : "rgba(255,255,255,0.08)"}`,
+                borderRadius: 8, padding: "5px 10px", fontSize: 11, fontWeight: 600,
+                cursor: saving ? "wait" : "pointer", fontFamily: "'Plus Jakarta Sans'",
+                transition: "all .15s",
+              }}
+              onMouseEnter={(e) => { if (!active && !saving) { e.target.style.color = col; e.target.style.borderColor = col; } }}
+              onMouseLeave={(e) => { if (!active && !saving) { e.target.style.color = "#6b6f82"; e.target.style.borderColor = "rgba(255,255,255,0.08)"; } }}
+            >
+              {s === "Asistencia" ? "✓ Asistencia"
+                : s === "Falta" ? "✕ Falta"
+                : s === "Cancelación" ? "⊘ Canceló"
+                : "⚡ Express"}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function RecentSection({ data, today }) {
+  const recent = useMemo(() =>
+    [...data]
+      .filter((r) => r.dia && r.dia !== today)
+      .sort((a, b) => (b.dia || "") > (a.dia || "") ? 1 : -1)
+      .slice(0, 20),
+    [data, today]
+  );
+  if (!recent.length) return null;
+  return (
+    <Cd style={{ marginTop: 20 }}>
+      <div style={S.h3}>Asesorías recientes</div>
+      <div style={{ overflowX: "auto" }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+          <thead>
+            <tr style={{ borderBottom: "1px solid rgba(255,255,255,0.08)" }}>
+              {["Fecha","Hora","Alumno","Matrícula","Asesor","Servicio","Estatus"].map((h) => (
+                <th key={h} style={{ textAlign: "left", padding: "8px 10px", fontSize: 10, textTransform: "uppercase", letterSpacing: 1, color: "#6b6f82", fontWeight: 600, whiteSpace: "nowrap" }}>{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {recent.map((r) => (
+              <tr key={r.id} style={{ borderBottom: "1px solid rgba(255,255,255,0.04)" }}
+                onMouseEnter={(e) => e.currentTarget.style.background = "rgba(99,102,241,0.05)"}
+                onMouseLeave={(e) => e.currentTarget.style.background = "transparent"}>
+                <td style={{ padding: "8px 10px", ...S.mono, fontSize: 11, color: "#6b6f82" }}>{fmtDate(r.dia)}</td>
+                <td style={{ padding: "8px 10px", ...S.mono, fontSize: 11 }}>{r.hora || "—"}</td>
+                <td style={{ padding: "8px 10px", fontWeight: 500 }}>{[r.nombre, r.ap].filter(Boolean).join(" ") || "—"}</td>
+                <td style={{ padding: "8px 10px", ...S.mono, fontSize: 11, color: "#a5b4fc" }}>{r.matricula}</td>
+                <td style={{ padding: "8px 10px", fontSize: 11, color: "#8e92a6" }}>{r.atiende}</td>
+                <td style={{ padding: "8px 10px", fontSize: 11, maxWidth: 160, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.servicio}</td>
+                <td style={{ padding: "8px 10px" }}>
+                  <span style={S.badge(STATUS_COLORS[r.estatus] || "#6366f1")}>{r.estatus}</span>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </Cd>
+  );
+}
+
+/* ═══ TAB ASESORÍAS (grid de captura) ═══ */
+const GRID_COLS = [
+  { key: "dia",             label: "Día",         width: 130, type: "date" },
+  { key: "hora",            label: "Hora",        width: 80,  type: "text", placeholder: "09:00" },
+  { key: "matricula",       label: "Matrícula",   width: 110, type: "text", required: true },
+  { key: "nombre",          label: "Nombre",      width: 140, type: "text" },
+  { key: "ap",              label: "A. Paterno",  width: 120, type: "text" },
+  { key: "am",              label: "A. Materno",  width: 120, type: "text" },
+  { key: "atiende",         label: "Atiende",     width: 160, type: "select", options: ASESORES },
+  { key: "servicio",        label: "Servicio",    width: 200, type: "select", options: SERVICIOS.map((s) => s.label) },
+  { key: "clave",           label: "Clave",       width: 70,  type: "text", readOnly: true },
+  { key: "estatus",         label: "Estatus",     width: 120, type: "select", options: ESTATUSES },
+  { key: "escuela",         label: "Escuela",     width: 160, type: "select", options: ESCUELAS },
+  { key: "programa",        label: "Programa",    width: 160, type: "text" },
+  { key: "semestre",        label: "Semestre",    width: 90,  type: "select", options: SEMESTRES },
+  { key: "cag",             label: "CAG",         width: 70,  type: "select", options: CAG_OPTS },
+  { key: "exatec",          label: "EXATEC",      width: 180, type: "select", options: EXATEC_OPTS },
+  { key: "interes_asesoria",label: "Interés",     width: 180, type: "select", options: INTERESES },
+  { key: "modalidad",       label: "Modalidad",   width: 110, type: "select", options: MODALIDADES },
+  { key: "campus",          label: "Campus",      width: 100, type: "text" },
+  { key: "comunidad",       label: "Comunidad",   width: 110, type: "select", options: COMUNIDADES },
+  { key: "celular",         label: "Celular",     width: 120, type: "text" },
+  { key: "correo_personal", label: "Correo",      width: 180, type: "text" },
+  { key: "linkedin",        label: "LinkedIn",    width: 140, type: "text" },
+  { key: "notas",           label: "Notas",       width: 200, type: "text" },
+];
+
+function emptyRow() {
+  return { id: null, dia: todayISO(), hora: "", matricula: "", nombre: "", ap: "", am: "",
+    servicio: "", clave: "", atiende: "", escuela: "", programa: "", estatus: "Agendado",
+    interes_asesoria: "", semestre: "", cag: "", exatec: "", modalidad: "", campus: "",
+    comunidad: "", celular: "", correo_personal: "", linkedin: "", notas: "" };
+}
+
+function TabAsesorias({ data, onRefresh }) {
+  const [rows, setRows] = useState([]);
+  const [editCell, setEditCell] = useState(null); // {rowIdx, key}
+  const [saving, setSaving] = useState(new Set());
+  const [deleting, setDeleting] = useState(new Set());
+  const [search, setSearch] = useState("");
+  const [fAsesor, setFAsesor] = useState("");
+  const [fEstatus, setFEstatus] = useState("");
+  const [importing, setImporting] = useState(false);
+  const [importMsg, setImportMsg] = useState(null);
+  const inputRef = useRef();
+  const dSearch = useDebounce(search, 200);
+
+  useEffect(() => {
+    setRows([...data, emptyRow()]);
+  }, [data]);
+
+  const filtered = useMemo(() => {
+    if (!dSearch && !fAsesor && !fEstatus) return rows;
+    return rows.filter((r) => {
+      if (r.id === null) return true; // always show new row
+      const q = norm(dSearch);
+      const matchSearch = !dSearch || norm(r.nombre).includes(q) || norm(r.matricula).includes(q) || norm(r.ap).includes(q);
+      const matchAsesor = !fAsesor || r.atiende === fAsesor;
+      const matchEstatus = !fEstatus || r.estatus === fEstatus;
+      return matchSearch && matchAsesor && matchEstatus;
+    });
+  }, [rows, dSearch, fAsesor, fEstatus]);
+
+  const updateRowLocal = (rowIdx, key, value) => {
+    setRows((prev) => {
+      const next = [...prev];
+      const row = { ...next[rowIdx] };
+      row[key] = value;
+      if (key === "servicio") row.clave = SERVICIO_CLAVE[value] || "";
+      // Add new empty row if editing the last (new) row
+      if (row.id === null && key === "matricula" && value) {
+        next[rowIdx] = row;
+        if (rowIdx === next.length - 1) next.push(emptyRow());
+        return next;
+      }
+      next[rowIdx] = row;
+      return next;
+    });
+  };
+
+  const saveRow = async (rowIdx) => {
+    const row = rows[rowIdx];
+    if (!row || saving.has(rowIdx)) return;
+    if (!row.matricula?.trim()) return;
+
+    const payload = { ...row };
+    delete payload.id;
+
+    setSaving((s) => new Set(s).add(rowIdx));
+    try {
+      if (row.id) {
+        await supabase.from("asesorias").update(payload).eq("id", row.id);
+      } else {
+        const { data: inserted } = await supabase.from("asesorias").insert(payload).select().single();
+        if (inserted) {
+          setRows((prev) => {
+            const next = [...prev];
+            next[rowIdx] = inserted;
+            return next;
+          });
+        }
+      }
+      await onRefresh();
+    } finally {
+      setSaving((s) => { const n = new Set(s); n.delete(rowIdx); return n; });
+    }
+  };
+
+  const deleteRow = async (rowIdx) => {
+    const row = rows[rowIdx];
+    if (!row?.id || deleting.has(rowIdx)) return;
+    if (!confirm(`¿Eliminar la asesoría de ${row.nombre || row.matricula}?`)) return;
+    setDeleting((s) => new Set(s).add(rowIdx));
+    await supabase.from("asesorias").delete().eq("id", row.id);
+    await onRefresh();
+    setDeleting((s) => { const n = new Set(s); n.delete(rowIdx); return n; });
+  };
+
+  const handleCellBlur = (rowIdx) => {
+    saveRow(rowIdx);
+    setEditCell(null);
+  };
+
+  const handleKeyDown = (e, rowIdx, colIdx) => {
+    if (e.key === "Enter" || e.key === "Tab") {
+      e.preventDefault();
+      saveRow(rowIdx);
+      // Move to next cell
+      const nextCol = colIdx + 1 < GRID_COLS.length ? colIdx + 1 : 0;
+      const nextRow = colIdx + 1 < GRID_COLS.length ? rowIdx : rowIdx + 1;
+      if (nextRow < rows.length) {
+        setEditCell({ rowIdx: nextRow, key: GRID_COLS[nextCol].key });
+      } else {
+        setEditCell(null);
+      }
+    }
+    if (e.key === "Escape") {
+      setEditCell(null);
+    }
+  };
+
+  /* Excel import */
+  const handleImport = async (file) => {
+    if (!file) return;
+    setImporting(true);
+    setImportMsg(null);
+    try {
+      const buffer = await file.arrayBuffer();
+      const wb = XLSX.read(buffer, { cellDates: false });
+      const ws = wb.Sheets[wb.SheetNames[0]];
+      const raw = XLSX.utils.sheet_to_json(ws, { defval: "" });
+      const normalize = (s) => String(s ?? "").trim();
+
+      const toInsert = raw.map((r) => ({
+        dia: parseExcelDate(r["Día"] || r["Dia"] || r["DÍA"]),
+        hora: normalize(r["Hora"]),
+        matricula: normalize(r["Matrícula"] || r["Matricula"]),
+        nombre: normalize(r["Nombre"]),
+        ap: normalize(r["AP"]),
+        am: normalize(r["AM"]),
+        servicio: normalize(r["Servicio"]),
+        clave: normalize(r["Clave"]),
+        atiende: normalize(r["Atiende"]),
+        escuela: normalize(r["Escuela"]),
+        programa: normalize(r["Programa"]),
+        estatus: normalize(r["Estatus"]) || "Agendado",
+        interes_asesoria: normalize(r["Interés Asesoría"] || r["Interes Asesoria"] || r["Interés Asesoria"] || r["Interes Asesoría"]),
+        semestre: normalize(r["Semestre"]),
+        cag: normalize(r["CAG"]),
+        exatec: normalize(r["EXATEC"]),
+        modalidad: normalize(r["Modalidad"]),
+        campus: normalize(r["Campus"]),
+        comunidad: normalize(r["Comunidad"]),
+        celular: normalize(r["Celular"]),
+        correo_personal: normalize(r["Correo Personal"]),
+        linkedin: normalize(r["LinkedIn"]),
+        notas: normalize(r["Notas"]),
+      })).filter((r) => r.matricula);
+
+      if (!toInsert.length) {
+        setImportMsg({ type: "error", text: "No se encontraron registros válidos (¿falta columna Matrícula?)." });
+        return;
+      }
+
+      const chunkSize = 500;
+      let inserted = 0;
+      for (let i = 0; i < toInsert.length; i += chunkSize) {
+        const { error } = await supabase.from("asesorias").insert(toInsert.slice(i, i + chunkSize));
+        if (!error) inserted += Math.min(chunkSize, toInsert.length - i);
+      }
+      setImportMsg({ type: "ok", text: `${inserted} registros importados correctamente.` });
+      await onRefresh();
+    } catch (e) {
+      setImportMsg({ type: "error", text: `Error: ${e.message}` });
+    } finally {
+      setImporting(false);
+      if (inputRef.current) inputRef.current.value = "";
+    }
   };
 
   return (
     <div>
-      <div style={{ display:"flex", gap:10, marginBottom:20 }}>
-        <Bt color="#10b981" onClick={dlAsist}>↓ Asistencias</Bt>
-        <Bt color="#6366f1" onClick={dlReporte}>↓ Reporte completo</Bt>
+      {/* Toolbar */}
+      <div style={{ display: "flex", gap: 10, marginBottom: 14, flexWrap: "wrap", alignItems: "center" }}>
+        <input style={{ ...S.input, maxWidth: 260 }} placeholder="Buscar nombre o matrícula..."
+          value={search} onChange={(e) => setSearch(e.target.value)} />
+        <select style={S.select} value={fAsesor} onChange={(e) => setFAsesor(e.target.value)}>
+          <option value="">Todos los asesores</option>
+          {ASESORES.map((a) => <option key={a} value={a}>{a}</option>)}
+        </select>
+        <select style={S.select} value={fEstatus} onChange={(e) => setFEstatus(e.target.value)}>
+          <option value="">Todos los estatus</option>
+          {ESTATUSES.map((s) => <option key={s} value={s}>{s}</option>)}
+        </select>
+        <div style={{ marginLeft: "auto", display: "flex", gap: 8, alignItems: "center" }}>
+          <span style={{ ...S.mono, fontSize: 11, color: "#6b6f82" }}>{data.length} registros</span>
+          <label style={{ ...S.btn("#10b981"), cursor: "pointer", display: "inline-block" }}>
+            {importing ? "Importando..." : "↑ Importar Excel"}
+            <input ref={inputRef} type="file" accept=".xlsx,.xls" style={{ display: "none" }}
+              onChange={(e) => handleImport(e.target.files[0])} disabled={importing} />
+          </label>
+          <Bt color="#6366f1" onClick={() => dlXl(data.map((r) => ({ Día: r.dia, Hora: r.hora, Matrícula: r.matricula, Nombre: r.nombre, AP: r.ap, AM: r.am, Servicio: r.servicio, Clave: r.clave, Atiende: r.atiende, Escuela: r.escuela, Programa: r.programa, Estatus: r.estatus, Interés: r.interes_asesoria, Semestre: r.semestre, CAG: r.cag, EXATEC: r.exatec, Modalidad: r.modalidad, Campus: r.campus, Comunidad: r.comunidad, Celular: r.celular, Correo: r.correo_personal, LinkedIn: r.linkedin, Notas: r.notas })), "asesorias.xlsx")}>
+            ↓ Exportar Excel
+          </Bt>
+        </div>
       </div>
+
+      {importMsg && (
+        <div style={{ marginBottom: 12, padding: "10px 16px", borderRadius: 10, fontSize: 13,
+          background: importMsg.type === "ok" ? "rgba(16,185,129,0.1)" : "rgba(239,68,68,0.1)",
+          border: `1px solid ${importMsg.type === "ok" ? "rgba(16,185,129,0.3)" : "rgba(239,68,68,0.3)"}`,
+          color: importMsg.type === "ok" ? "#10b981" : "#ef4444" }}>
+          {importMsg.text}
+          <button onClick={() => setImportMsg(null)} style={{ float: "right", background: "none", border: "none", color: "inherit", cursor: "pointer" }}>✕</button>
+        </div>
+      )}
+
+      {/* Grid */}
+      <div style={{ overflowX: "auto", borderRadius: 12, border: "1px solid rgba(255,255,255,0.08)" }}>
+        <table style={{ borderCollapse: "collapse", fontSize: 12, tableLayout: "fixed", minWidth: GRID_COLS.reduce((a, c) => a + c.width, 0) + 40 }}>
+          <thead style={{ position: "sticky", top: 0, zIndex: 10 }}>
+            <tr style={{ background: "#0a1525" }}>
+              <th style={{ width: 40, padding: "10px 8px", borderBottom: "1px solid rgba(255,255,255,0.1)" }} />
+              {GRID_COLS.map((col) => (
+                <th key={col.key} style={{ width: col.width, padding: "10px 10px", textAlign: "left", fontSize: 10, textTransform: "uppercase", letterSpacing: 0.8, color: "#6b6f82", fontWeight: 600, borderBottom: "1px solid rgba(255,255,255,0.1)", whiteSpace: "nowrap", overflow: "hidden" }}>
+                  {col.label}{col.required && <span style={{ color: "#ef4444" }}> *</span>}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {filtered.map((row, rowIdx) => {
+              const isNew = row.id === null;
+              const isSaving = saving.has(rowIdx);
+              return (
+                <tr key={row.id || `new-${rowIdx}`}
+                  style={{ background: isNew ? "rgba(99,102,241,0.04)" : "transparent", transition: "background .15s" }}
+                  onMouseEnter={(e) => { if (!isNew) e.currentTarget.style.background = "rgba(99,102,241,0.05)"; }}
+                  onMouseLeave={(e) => { if (!isNew) e.currentTarget.style.background = "transparent"; }}>
+                  {/* Delete / saving indicator */}
+                  <td style={{ padding: "4px 6px", borderBottom: "1px solid rgba(255,255,255,0.04)", textAlign: "center" }}>
+                    {isSaving ? (
+                      <span style={{ display: "inline-block", width: 12, height: 12, border: "2px solid rgba(99,102,241,0.3)", borderTopColor: "#6366f1", borderRadius: "50%", animation: "spin 0.8s linear infinite" }} />
+                    ) : !isNew ? (
+                      <button onClick={() => deleteRow(rowIdx)} title="Eliminar"
+                        style={{ background: "none", border: "none", color: "#6b6f82", cursor: "pointer", padding: 2, fontSize: 13, lineHeight: 1 }}
+                        onMouseEnter={(e) => e.target.style.color = "#ef4444"}
+                        onMouseLeave={(e) => e.target.style.color = "#6b6f82"}>
+                        ✕
+                      </button>
+                    ) : (
+                      <span style={{ color: "#6b6f82", fontSize: 10 }}>+</span>
+                    )}
+                  </td>
+                  {GRID_COLS.map((col, colIdx) => {
+                    const isEditing = editCell?.rowIdx === rowIdx && editCell?.key === col.key;
+                    const val = row[col.key] ?? "";
+                    const isEmpty = !val;
+                    return (
+                      <td key={col.key}
+                        style={{ padding: "3px 4px", borderBottom: "1px solid rgba(255,255,255,0.04)", borderRight: "1px solid rgba(255,255,255,0.03)", maxWidth: col.width, overflow: "hidden" }}
+                        onClick={() => !col.readOnly && setEditCell({ rowIdx, key: col.key })}>
+                        {isEditing && !col.readOnly ? (
+                          col.type === "select" ? (
+                            <select
+                              autoFocus
+                              value={val}
+                              onChange={(e) => { updateRowLocal(rowIdx, col.key, e.target.value); }}
+                              onBlur={() => handleCellBlur(rowIdx)}
+                              onKeyDown={(e) => handleKeyDown(e, rowIdx, colIdx)}
+                              style={{ ...S.select, width: "100%", fontSize: 12, padding: "4px 6px", borderRadius: 6, boxSizing: "border-box" }}>
+                              <option value="">—</option>
+                              {col.options.map((o) => <option key={o} value={o}>{o}</option>)}
+                            </select>
+                          ) : (
+                            <input
+                              autoFocus
+                              type={col.type === "date" ? "date" : "text"}
+                              value={val}
+                              onChange={(e) => updateRowLocal(rowIdx, col.key, e.target.value)}
+                              onBlur={() => handleCellBlur(rowIdx)}
+                              onKeyDown={(e) => handleKeyDown(e, rowIdx, colIdx)}
+                              style={{ ...S.input, fontSize: 12, padding: "4px 6px", borderRadius: 6, boxSizing: "border-box", background: "#0d1e38" }}
+                            />
+                          )
+                        ) : (
+                          <div style={{
+                            padding: "5px 6px", minHeight: 28, fontSize: 12, borderRadius: 6,
+                            color: isEmpty && !isNew ? "#3a3f5a" : isEmpty && isNew ? "#4a5080" : col.key === "matricula" ? "#a5b4fc" : col.key === "estatus" ? (STATUS_COLORS[val] || "#e8e9ed") : "#e8e9ed",
+                            fontFamily: col.key === "matricula" || col.key === "clave" ? "'JetBrains Mono', monospace" : "inherit",
+                            cursor: col.readOnly ? "default" : "text",
+                            overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+                            border: "1px solid transparent",
+                          }}
+                            onMouseEnter={(e) => { if (!col.readOnly) e.currentTarget.style.border = "1px solid rgba(99,102,241,0.3)"; }}
+                            onMouseLeave={(e) => { e.currentTarget.style.border = "1px solid transparent"; }}>
+                            {isEmpty ? (isNew && col.key === "matricula" ? "Nueva asesoría..." : col.placeholder || "") : val}
+                          </div>
+                        )}
+                      </td>
+                    );
+                  })}
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+      <div style={{ marginTop: 8, color: "#6b6f82", fontSize: 11 }}>
+        Haz clic en cualquier celda para editar · Tab / Enter para avanzar · los cambios se guardan automáticamente al salir de la celda
+      </div>
+    </div>
+  );
+}
+
+function parseExcelDate(v) {
+  if (!v) return null;
+  if (typeof v === "number") {
+    const d = new Date(Math.round((v - 25569) * 86400000));
+    if (isNaN(d)) return null;
+    return d.toISOString().slice(0, 10);
+  }
+  const s = String(v).trim();
+  const d = new Date(s);
+  if (isNaN(d)) return null;
+  return d.toISOString().slice(0, 10);
+}
+
+/* ═══ TAB DASHBOARD ═══ */
+function TabDashboard({ data }) {
+  const total = data.length;
+  const asist = data.filter((r) => r.estatus === "Asistencia").length;
+  const faltas = data.filter((r) => r.estatus === "Falta").length;
+  const express = data.filter((r) => r.estatus === "Express").length;
+  const cancel = data.filter((r) => r.estatus === "Cancelación").length;
+  const uniq = new Set(data.map((r) => r.matricula)).size;
+  const base = total - express;
+
+  const cagsUniq = useMemo(() => new Set(data.filter(isCAGS).map((r) => r.matricula)).size, [data]);
+  const dic25Uniq = useMemo(() => new Set(data.filter(isDIC25).map((r) => r.matricula)).size, [data]);
+
+  const weekData = useMemo(() => {
+    const wm = {};
+    data.forEach((r) => {
+      if (!r.dia) return;
+      const d = new Date(r.dia + "T12:00:00");
+      const jan1 = new Date(d.getFullYear(), 0, 1);
+      const w = Math.ceil((((d - jan1) / 86400000) + jan1.getDay() + 1) / 7);
+      wm[w] = (wm[w] || 0) + 1;
+    });
+    return Object.entries(wm).sort((a, b) => +a[0] - +b[0]).map(([w, v]) => ({ name: `S${w}`, value: v }));
+  }, [data]);
+
+  const monthData = useMemo(() => {
+    const m = {};
+    data.forEach((r) => {
+      if (!r.dia) return;
+      const k = new Date(r.dia + "T12:00:00").toLocaleDateString("es-MX", { month: "short", year: "numeric" });
+      m[k] = (m[k] || 0) + 1;
+    });
+    return Object.entries(m).map(([name, value]) => ({ name, value }));
+  }, [data]);
+
+  const statusData = [
+    { name: "Asistencia", value: asist, color: "#10b981" },
+    { name: "Falta", value: faltas, color: "#ef4444" },
+    { name: "Express", value: express, color: "#f59e0b" },
+    { name: "Cancelación", value: cancel, color: "#8b5cf6" },
+  ];
+  const escData = countBy(data, "escuela");
+  const intData = countBy(data, "interes_asesoria");
+  const srvData = countBy(data, "servicio");
+  const modData = countBy(data, "modalidad");
+
+  const ref1 = useRef(), ref2 = useRef();
+
+  return (
+    <div>
       <div style={S.grid(5)}>
-        <KPI label="Total asesorías agendadas" value={total.toLocaleString()} color="#6366f1" sub={`${(total / Math.max(1, uniq)).toFixed(1)} por alumno`} />
+        <KPI label="Total asesorías" value={total.toLocaleString()} color="#6366f1" sub={uniq ? `${(total / uniq).toFixed(1)} por alumno` : ""} />
         <KPI label="Alumnos únicos" value={uniq.toLocaleString()} color="#3b82f6" />
-        <KPI label="Tasa asistencia" value={`${tasaAsist}%`} color="#10b981" sub={`${asist} asistencias`} />
-        <KPI label="Faltas" value={faltas} color="#ef4444" sub={`${tasaFalta}% tasa`} />
+        <KPI label="Tasa asistencia" value={base ? `${((asist / base) * 100).toFixed(1)}%` : "—"} color="#10b981" sub={`${asist} asistencias`} />
+        <KPI label="Faltas" value={faltas} color="#ef4444" sub={base ? `${((faltas / base) * 100).toFixed(1)}%` : ""} />
         <KPI label="Express" value={express} color="#f59e0b" />
       </div>
-      <div style={{ ...S.grid(2), marginBottom:4 }}>
-        <KPI label="CAGS — Candidatos JUN 2026" value={cagsUniq} color="#a855f7" sub={`${uniq ? ((cagsUniq / uniq) * 100).toFixed(1) : 0}% de alumnos únicos`} />
-        <KPI label="DIC 2025 — Generación graduada" value={dic25Uniq} color="#22d3ee" sub={`${uniq ? ((dic25Uniq / uniq) * 100).toFixed(1) : 0}% de alumnos únicos`} />
+      <div style={{ ...S.grid(2), marginBottom: 4 }}>
+        <KPI label="CAGS — Candidatos JUN 2026" value={cagsUniq} color="#a855f7" sub={uniq ? `${((cagsUniq / uniq) * 100).toFixed(1)}% de alumnos únicos` : ""} />
+        <KPI label="DIC 2025 — Generación graduada" value={dic25Uniq} color="#22d3ee" sub={uniq ? `${((dic25Uniq / uniq) * 100).toFixed(1)}% de alumnos únicos` : ""} />
       </div>
 
-      <ChartCard title="Asesorías por semana" chartRef={ref1} filename="asesorias_semana.png">
-        <div ref={ref1}><ResponsiveContainer width="100%" height={260}>
-          <BarChart data={weekData} margin={{ top:5, right:20, bottom:5, left:10 }}>
-            <XAxis dataKey="name" tick={{ fill:"#6b6f82", fontSize:10 }} />
-            <YAxis tick={{ fill:"#6b6f82", fontSize:10 }} />
-            <Tooltip content={<TT />} />
-            <Bar dataKey="value" fill="#6366f1" radius={[6,6,0,0]} />
-          </BarChart>
-        </ResponsiveContainer></div>
-      </ChartCard>
+      <div style={S.grid(2)}>
+        <Cd>
+          <div style={S.h3}>Asesorías por semana</div>
+          <div ref={ref1}><ResponsiveContainer width="100%" height={240}>
+            <BarChart data={weekData} margin={{ top: 5, right: 20, bottom: 5, left: 0 }}>
+              <XAxis dataKey="name" tick={{ fill: "#6b6f82", fontSize: 10 }} />
+              <YAxis tick={{ fill: "#6b6f82", fontSize: 10 }} />
+              <Tooltip content={<TT />} />
+              <Bar dataKey="value" fill="#6366f1" radius={[6, 6, 0, 0]} />
+            </BarChart>
+          </ResponsiveContainer></div>
+        </Cd>
+        <Cd>
+          <div style={S.h3}>Tendencia mensual</div>
+          <div ref={ref2}><ResponsiveContainer width="100%" height={240}>
+            <LineChart data={monthData} margin={{ top: 5, right: 20, bottom: 5, left: 0 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.06)" />
+              <XAxis dataKey="name" tick={{ fill: "#6b6f82", fontSize: 10 }} />
+              <YAxis tick={{ fill: "#6b6f82", fontSize: 10 }} />
+              <Tooltip content={<TT />} />
+              <Line type="monotone" dataKey="value" stroke="#6366f1" strokeWidth={2.5} dot={{ fill: "#6366f1", r: 4 }} />
+            </LineChart>
+          </ResponsiveContainer></div>
+        </Cd>
+      </div>
 
       <div style={S.grid(3)}>
-        <ChartCard title="Estatus">
+        <Cd>
+          <div style={S.h3}>Estatus</div>
           <SB items={statusData} total={total} />
-        </ChartCard>
-        <ChartCard title="Escuelas" chartRef={ref2} filename="escuelas.png">
-          <div ref={ref2}><ResponsiveContainer width="100%" height={220}>
-            <PieChart>
-              <Pie data={escData} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={80} innerRadius={35} paddingAngle={3}>
-                {escData.map((_, i) => <Cell key={i} fill={CHART_COLORS[i % CHART_COLORS.length]} />)}
-              </Pie>
-              <Tooltip content={<TT />} />
-            </PieChart>
-          </ResponsiveContainer></div>
-        </ChartCard>
-        <ChartCard title="Interés de asesoría">
+        </Cd>
+        <Cd>
+          <div style={S.h3}>Escuelas</div>
+          <SB items={escData.map((d, i) => ({ ...d, color: CHART_COLORS[i % CHART_COLORS.length] }))} total={total} />
+        </Cd>
+        <Cd>
+          <div style={S.h3}>Interés de asesoría</div>
           <SB items={intData.map((d, i) => ({ ...d, color: CHART_COLORS[i % CHART_COLORS.length] }))} total={total} />
-        </ChartCard>
+        </Cd>
       </div>
 
-      <div style={S.grid(3)}>
-        <ChartCard title="Servicios" chartRef={ref3} filename="servicios.png">
-          <div ref={ref3}><ResponsiveContainer width="100%" height={Math.max(200, srvData.length * 28)}>
-            <BarChart data={srvData} layout="vertical" margin={{ left:120, right:20, top:5, bottom:5 }}>
-              <XAxis type="number" tick={{ fill:"#6b6f82", fontSize:10 }} />
-              <YAxis type="category" dataKey="name" tick={{ fill:"#8e92a6", fontSize:10 }} width={115} />
+      <div style={S.grid(2)}>
+        <Cd>
+          <div style={S.h3}>Servicios</div>
+          <ResponsiveContainer width="100%" height={Math.max(200, srvData.length * 26)}>
+            <BarChart data={srvData} layout="vertical" margin={{ left: 160, right: 20, top: 5, bottom: 5 }}>
+              <XAxis type="number" tick={{ fill: "#6b6f82", fontSize: 10 }} />
+              <YAxis type="category" dataKey="name" tick={{ fill: "#8e92a6", fontSize: 10 }} width={155} />
               <Tooltip content={<TT />} />
-              <Bar dataKey="value" radius={[0,6,6,0]}>{srvData.map((_, i) => <Cell key={i} fill={CHART_COLORS[i % CHART_COLORS.length]} />)}</Bar>
+              <Bar dataKey="value" radius={[0, 6, 6, 0]}>{srvData.map((_, i) => <Cell key={i} fill={CHART_COLORS[i % CHART_COLORS.length]} />)}</Bar>
             </BarChart>
-          </ResponsiveContainer></div>
-        </ChartCard>
-        <ChartCard title="Comunidades" chartRef={ref4} filename="comunidades.png">
-          <div ref={ref4}><ResponsiveContainer width="100%" height={260}>
-            <BarChart data={comData.slice(0, 10)} margin={{ top:5, right:10, bottom:5, left:10 }}>
-              <XAxis dataKey="name" tick={{ fill:"#6b6f82", fontSize:9 }} angle={-30} textAnchor="end" height={60} />
-              <YAxis tick={{ fill:"#6b6f82", fontSize:10 }} />
-              <Tooltip content={<TT />} />
-              <Bar dataKey="value" radius={[6,6,0,0]}>{comData.slice(0,10).map((_, i) => <Cell key={i} fill={CHART_COLORS[i % CHART_COLORS.length]} />)}</Bar>
-            </BarChart>
-          </ResponsiveContainer></div>
-        </ChartCard>
-        <ChartCard title="Modalidad" chartRef={ref5} filename="modalidad.png">
-          <div ref={ref5}><ResponsiveContainer width="100%" height={220}>
+          </ResponsiveContainer>
+        </Cd>
+        <Cd>
+          <div style={S.h3}>Modalidad</div>
+          <ResponsiveContainer width="100%" height={220}>
             <PieChart>
               <Pie data={modData} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={80} innerRadius={35} paddingAngle={5}>
                 {modData.map((_, i) => <Cell key={i} fill={CHART_COLORS[i % CHART_COLORS.length]} />)}
               </Pie>
               <Tooltip content={<TT />} />
-              <Legend formatter={(v) => <span style={{ color:"#8e92a6", fontSize:11 }}>{v}</span>} />
+              <Legend formatter={(v) => <span style={{ color: "#8e92a6", fontSize: 11 }}>{v}</span>} />
             </PieChart>
-          </ResponsiveContainer></div>
-        </ChartCard>
+          </ResponsiveContainer>
+        </Cd>
       </div>
     </div>
   );
 }
 
-/* ═══════════════ TAB: ASESORES ═══════════════ */
+/* ═══ TAB ASESORES ═══ */
+function AsesorModal({ asesor, records, onClose }) {
+  const [selectedStudent, setSelectedStudent] = useState(null);
+  const [aSearch, setASearch] = useState("");
+  const dASearch = useDebounce(aSearch, 200);
+
+  const asist = records.filter((r) => r.estatus === "Asistencia").length;
+  const faltas = records.filter((r) => r.estatus === "Falta").length;
+  const express = records.filter((r) => r.estatus === "Express").length;
+  const base = records.length - express;
+
+  const alumnosList = useMemo(() => {
+    const m = {};
+    records.forEach((r) => {
+      if (!m[r.matricula]) m[r.matricula] = { matricula: r.matricula, nombre: r.nombre, ap: r.ap, sesiones: 0, asistencias: 0, records: [], escuela: r.escuela, programa: r.programa };
+      const s = m[r.matricula];
+      s.sesiones++;
+      s.records.push(r);
+      if (r.estatus === "Asistencia") s.asistencias++;
+    });
+    return Object.values(m).sort((a, b) => b.sesiones - a.sesiones);
+  }, [records]);
+
+  const alumnosFiltrados = useMemo(() => {
+    if (!dASearch) return alumnosList;
+    const q = norm(dASearch);
+    return alumnosList.filter((a) => norm(a.nombre).includes(q) || norm(a.matricula).includes(q));
+  }, [alumnosList, dASearch]);
+
+  return (
+    <>
+      {selectedStudent && (
+        <StudentModal matricula={selectedStudent.matricula} records={selectedStudent.records} onClose={() => setSelectedStudent(null)} />
+      )}
+      <Modal onClose={onClose}>
+        <div style={{ fontSize: 20, fontWeight: 700, marginBottom: 20 }}>{asesor}</div>
+        <div style={S.grid(5)}>
+          <KPI label="Total" value={records.length} color="#6366f1" />
+          <KPI label="Asistencias" value={asist} color="#10b981" sub={base ? `${((asist / base) * 100).toFixed(1)}%` : "—"} />
+          <KPI label="Faltas" value={faltas} color="#ef4444" sub={base ? `${((faltas / base) * 100).toFixed(1)}%` : "—"} />
+          <KPI label="Alumnos únicos" value={alumnosList.length} color="#8b5cf6" />
+          <KPI label="CAGS atendidos" value={new Set(records.filter(isCAGS).map((r) => r.matricula)).size} color="#a855f7" />
+        </div>
+        <div style={{ marginTop: 20 }}>
+          <div style={{ display: "flex", gap: 8, marginBottom: 10, alignItems: "center" }}>
+            <div style={S.h3}>Alumnos atendidos ({alumnosFiltrados.length})</div>
+            <input style={{ ...S.input, maxWidth: 200, padding: "6px 10px", marginLeft: "auto" }} placeholder="Buscar alumno..."
+              value={aSearch} onChange={(e) => setASearch(e.target.value)} />
+          </div>
+          <div style={{ overflowX: "auto", maxHeight: 320, overflowY: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+              <thead style={{ position: "sticky", top: 0, background: "#0f1628", zIndex: 1 }}>
+                <tr style={{ borderBottom: "1px solid rgba(255,255,255,0.08)" }}>
+                  {["Alumno", "Matrícula", "Sesiones", "Asistencias", "Escuela"].map((h) => (
+                    <th key={h} style={{ textAlign: "left", padding: "8px 10px", fontSize: 10, textTransform: "uppercase", letterSpacing: 1, color: "#6b6f82", fontWeight: 600 }}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {alumnosFiltrados.map((a, i) => (
+                  <tr key={i} style={{ borderBottom: "1px solid rgba(255,255,255,0.04)", cursor: "pointer" }}
+                    onClick={() => setSelectedStudent(a)}
+                    onMouseEnter={(e) => e.currentTarget.style.background = "rgba(99,102,241,0.06)"}
+                    onMouseLeave={(e) => e.currentTarget.style.background = "transparent"}>
+                    <td style={{ padding: "8px 10px", fontWeight: 500 }}>{[a.nombre, a.ap].filter(Boolean).join(" ")}</td>
+                    <td style={{ padding: "8px 10px", ...S.mono, fontSize: 11, color: "#a5b4fc" }}>{a.matricula}</td>
+                    <td style={{ padding: "8px 10px", textAlign: "center" }}><span style={S.badge("#6366f1")}>{a.sesiones}</span></td>
+                    <td style={{ padding: "8px 10px", textAlign: "center" }}><span style={S.badge("#10b981")}>{a.asistencias}</span></td>
+                    <td style={{ padding: "8px 10px", fontSize: 11, color: "#8e92a6" }}>{a.escuela}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </Modal>
+    </>
+  );
+}
+
 function TabAsesores({ data }) {
   const [selected, setSelected] = useState(null);
   const byAsesor = useMemo(() => {
     const m = {};
-    data.forEach(r => { (m[r.asesor] = m[r.asesor] || []).push(r); });
+    data.forEach((r) => { (m[r.atiende] = m[r.atiende] || []).push(r); });
     return Object.entries(m).sort((a, b) => b[1].length - a[1].length);
   }, [data]);
-  const distData = byAsesor.map(([name, recs]) => ({ name, value: recs.length }));
-  const distRef = useRef();
 
   return (
     <div>
-      {selected && <AsesorModal asesor={selected} records={data.filter(r => r.asesor === selected)} onClose={() => setSelected(null)} />}
-      <div style={{ ...S.grid(2), marginBottom:20 }}>
+      {selected && <AsesorModal asesor={selected} records={data.filter((r) => r.atiende === selected)} onClose={() => setSelected(null)} />}
+      <div style={S.grid(2)}>
         {byAsesor.map(([name, recs], idx) => {
-          const a = recs.filter(r => r.estatus === "Asistencia").length;
-          const ex = recs.filter(r => r.estatus === "Express").length;
-          const f = recs.filter(r => r.estatus === "Falta").length;
+          const a = recs.filter((r) => r.estatus === "Asistencia").length;
+          const ex = recs.filter((r) => r.estatus === "Express").length;
+          const f = recs.filter((r) => r.estatus === "Falta").length;
           const b = recs.length - ex;
-          const weeks = new Set(recs.map(r => r.semana));
           const color = CHART_COLORS[idx % CHART_COLORS.length];
-          const cagsCount = new Set(recs.filter(r => r.isCAGS).map(r => r.matricula)).size;
-          const dic25Count = new Set(recs.filter(r => r.isDIC25).map(r => r.matricula)).size;
+          const cagsCount = new Set(recs.filter(isCAGS).map((r) => r.matricula)).size;
+          const dic25Count = new Set(recs.filter(isDIC25).map((r) => r.matricula)).size;
           return (
-            <Cd key={name} style={{ cursor:"pointer", borderLeft:`4px solid ${color}` }} >
-              <div onClick={() => setSelected(name)}>
-                <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:10 }}>
-                  <div style={{ fontSize:16, fontWeight:700 }}>{name}</div>
-                  <span style={{ ...S.mono, fontSize:22, fontWeight:700, color }}>{recs.length}</span>
-                </div>
-                <div style={{ display:"flex", gap:16, marginBottom:8, fontSize:12, color:"#8e92a6" }}>
-                  <span>Asistencia: <b style={{ color:"#10b981" }}>{b ? ((a / b) * 100).toFixed(0) : 0}%</b></span>
-                  <span>Prom/sem: <b style={{ color:"#f59e0b" }}>{weeks.size ? (recs.length / weeks.size).toFixed(1) : "—"}</b></span>
-                </div>
-                <div style={{ display:"flex", gap:6, marginBottom:8 }}>
-                  {cagsCount > 0 && <span style={S.badge("#a855f7")}>CAGS: {cagsCount}</span>}
-                  {dic25Count > 0 && <span style={S.badge("#22d3ee")}>DIC25: {dic25Count}</span>}
-                </div>
-                <div style={{ display:"flex", height:6, borderRadius:3, overflow:"hidden", gap:2 }}>
-                  {a > 0 && <div style={{ flex:a, background:"#10b981", borderRadius:3 }} />}
-                  {f > 0 && <div style={{ flex:f, background:"#ef4444", borderRadius:3 }} />}
-                  {ex > 0 && <div style={{ flex:ex, background:"#f59e0b", borderRadius:3 }} />}
-                </div>
+            <Cd key={name} style={{ cursor: "pointer", borderLeft: `4px solid ${color}` }} onClick={() => setSelected(name)}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+                <div style={{ fontSize: 16, fontWeight: 700 }}>{name}</div>
+                <span style={{ ...S.mono, fontSize: 22, fontWeight: 700, color }}>{recs.length}</span>
               </div>
-              <div style={{ display:"flex", gap:8, marginTop:12 }}>
-                <Bt color="#6366f1" onClick={(e) => { e.stopPropagation(); dlXl(recs.map(r => ({ Fecha:fmtDate(r.fecha), Matrícula:r.matricula, Alumno:r.nombre, Servicio:r.servicio, Estatus:r.estatus, Escuela:r.escuela, Programa:r.programa })), `${name}.xlsx`); }} style={{ fontSize:11, padding:"4px 10px" }}>↓ Excel</Bt>
+              <div style={{ display: "flex", gap: 16, marginBottom: 8, fontSize: 12, color: "#8e92a6" }}>
+                <span>Asistencia: <b style={{ color: "#10b981" }}>{b ? `${((a / b) * 100).toFixed(0)}%` : "—"}</b></span>
+                <span>Alumnos únicos: <b style={{ color: "#a5b4fc" }}>{new Set(recs.map((r) => r.matricula)).size}</b></span>
+              </div>
+              <div style={{ display: "flex", gap: 6, marginBottom: 8 }}>
+                {cagsCount > 0 && <span style={S.badge("#a855f7")}>CAGS: {cagsCount}</span>}
+                {dic25Count > 0 && <span style={S.badge("#22d3ee")}>DIC25: {dic25Count}</span>}
+              </div>
+              <div style={{ display: "flex", height: 6, borderRadius: 3, overflow: "hidden", gap: 2 }}>
+                {a > 0 && <div style={{ flex: a, background: "#10b981", borderRadius: 3 }} />}
+                {f > 0 && <div style={{ flex: f, background: "#ef4444", borderRadius: 3 }} />}
+                {ex > 0 && <div style={{ flex: ex, background: "#f59e0b", borderRadius: 3 }} />}
               </div>
             </Cd>
           );
         })}
       </div>
-      <ChartCard title="Distribución por asesor" chartRef={distRef} filename="distribucion_asesores.png">
-        <div ref={distRef}><ResponsiveContainer width="100%" height={280}>
-          <BarChart data={distData} margin={{ top:5, right:20, bottom:5, left:10 }}>
-            <XAxis dataKey="name" tick={{ fill:"#6b6f82", fontSize:10 }} />
-            <YAxis tick={{ fill:"#6b6f82", fontSize:10 }} />
-            <Tooltip content={<TT />} />
-            <Bar dataKey="value" radius={[6,6,0,0]}>{distData.map((_, i) => <Cell key={i} fill={CHART_COLORS[i % CHART_COLORS.length]} />)}</Bar>
-          </BarChart>
-        </ResponsiveContainer></div>
-      </ChartCard>
     </div>
   );
 }
 
-/* ═══════════════ TAB: PIPELINE ═══════════════ */
+/* ═══ TAB PIPELINE ═══ */
 function TabPipeline({ data }) {
   const srvData = useMemo(() => countBy(data, "servicio"), [data]);
   const top5 = srvData.slice(0, 5);
   const maxVal = top5[0]?.value || 1;
-  const progData = countBy(data, "programa").slice(0, 15);
-  const monthData = useMemo(() => {
-    const m = {};
-    data.forEach(r => { if (r.fecha) { const k = r.fecha.toLocaleDateString("es-MX", { month:"short", year:"numeric" }); m[k] = (m[k] || 0) + 1; } });
-    return Object.entries(m).map(([name, value]) => ({ name, value }));
-  }, [data]);
-  const lineRef = useRef();
-  const progRef = useRef();
 
   return (
     <div>
       <div style={S.grid(5)}>
-        {top5.map((s, i) => <KPI key={s.name} label={s.name} value={s.value} color={CHART_COLORS[i]} sub={`${((s.value / data.length) * 100).toFixed(1)}% del total`} />)}
+        {top5.map((s, i) => (
+          <KPI key={s.name} label={s.name} value={s.value} color={CHART_COLORS[i]}
+            sub={`${data.length ? ((s.value / data.length) * 100).toFixed(1) : 0}% del total`} />
+        ))}
       </div>
-
-      <Cd style={{ marginTop:16 }}>
+      <Cd style={{ marginTop: 16 }}>
         <div style={S.h3}>Funnel de servicios</div>
-        <div style={{ display:"flex", gap:8, alignItems:"flex-end", height:200, padding:"20px 10px" }}>
+        <div style={{ display: "flex", gap: 8, alignItems: "flex-end", height: 200, padding: "20px 10px" }}>
           {srvData.map((s, i) => (
-            <div key={s.name} style={{ flex:1, display:"flex", flexDirection:"column", alignItems:"center", gap:6 }}>
-              <span style={{ ...S.mono, fontSize:10, color:"#8e92a6" }}>{s.value}</span>
-              <div style={{ width:"100%", maxWidth:60, height:`${(s.value / maxVal) * 160}px`, background:`linear-gradient(180deg, ${CHART_COLORS[i % CHART_COLORS.length]}, ${CHART_COLORS[i % CHART_COLORS.length]}66)`, borderRadius:"8px 8px 4px 4px", minHeight:4, transition:"height .5s" }} />
-              <span style={{ fontSize:8, color:"#6b6f82", textAlign:"center", lineHeight:1.2, maxWidth:60, overflow:"hidden" }}>{s.name}</span>
+            <div key={s.name} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 6 }}>
+              <span style={{ ...S.mono, fontSize: 10, color: "#8e92a6" }}>{s.value}</span>
+              <div style={{ width: "100%", maxWidth: 60, height: `${(s.value / maxVal) * 160}px`, background: `linear-gradient(180deg, ${CHART_COLORS[i % CHART_COLORS.length]}, ${CHART_COLORS[i % CHART_COLORS.length]}66)`, borderRadius: "8px 8px 4px 4px", minHeight: 4 }} />
+              <span style={{ fontSize: 8, color: "#6b6f82", textAlign: "center", lineHeight: 1.2, maxWidth: 60 }}>{s.name}</span>
             </div>
           ))}
         </div>
       </Cd>
-
       <Cd>
         <div style={S.h3}>Todos los servicios</div>
         <SB items={srvData.map((d, i) => ({ ...d, color: CHART_COLORS[i % CHART_COLORS.length] }))} total={data.length} />
       </Cd>
-
-      <div style={S.grid(2)}>
-        <ChartCard title="Top programas académicos" chartRef={progRef} filename="programas.png">
-          <div ref={progRef}><ResponsiveContainer width="100%" height={Math.max(200, progData.length * 24)}>
-            <BarChart data={progData} layout="vertical" margin={{ left:50, right:20, top:5, bottom:5 }}>
-              <XAxis type="number" tick={{ fill:"#6b6f82", fontSize:10 }} />
-              <YAxis type="category" dataKey="name" tick={{ fill:"#8e92a6", fontSize:10 }} width={45} />
-              <Tooltip content={<TT />} />
-              <Bar dataKey="value" radius={[0,6,6,0]}>{progData.map((_, i) => <Cell key={i} fill={CHART_COLORS[i % CHART_COLORS.length]} />)}</Bar>
-            </BarChart>
-          </ResponsiveContainer></div>
-        </ChartCard>
-        <ChartCard title="Tendencia mensual" chartRef={lineRef} filename="tendencia_mensual.png">
-          <div ref={lineRef}><ResponsiveContainer width="100%" height={260}>
-            <LineChart data={monthData} margin={{ top:5, right:20, bottom:5, left:10 }}>
-              <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.06)" />
-              <XAxis dataKey="name" tick={{ fill:"#6b6f82", fontSize:10 }} />
-              <YAxis tick={{ fill:"#6b6f82", fontSize:10 }} />
-              <Tooltip content={<TT />} />
-              <Line type="monotone" dataKey="value" stroke="#6366f1" strokeWidth={2.5} dot={{ fill:"#6366f1", r:4 }} />
-            </LineChart>
-          </ResponsiveContainer></div>
-        </ChartCard>
-      </div>
     </div>
   );
 }
 
-/* ═══════════════ TAB: ALUMNOS ═══════════════ */
+/* ═══ TAB ALUMNOS ═══ */
 const PAGE_SIZE = 100;
 
 function TabAlumnos({ data }) {
@@ -805,210 +1047,126 @@ function TabAlumnos({ data }) {
   const [fAsesor, setFAsesor] = useState("");
   const [fEscuela, setFEscuela] = useState("");
   const [fEstatus, setFEstatus] = useState("");
-  const [fInteres, setFInteres] = useState("");
-  const [fPrograma, setFPrograma] = useState("");
-  const [fServicio, setFServicio] = useState("");
-  const [fComunidad, setFComunidad] = useState("");
   const [fCAGS, setFCAGS] = useState(false);
   const [fDIC25, setFDIC25] = useState(false);
   const [selectedStudent, setSelectedStudent] = useState(null);
-  const [sortCol, setSortCol] = useState("sesiones");
-  const [sortDir, setSortDir] = useState("desc");
   const [page, setPage] = useState(0);
-
   const dSearch = useDebounce(search, 200);
 
   const students = useMemo(() => {
     const m = {};
-    data.forEach(r => {
-      if (!m[r.matricula]) m[r.matricula] = { matricula:r.matricula, records:[], servicesSet:new Set() };
+    data.forEach((r) => {
+      if (!m[r.matricula]) m[r.matricula] = { matricula: r.matricula, records: [] };
       m[r.matricula].records.push(r);
-      m[r.matricula].servicesSet.add(r.servicio);
     });
-    return Object.values(m).map(s => {
-      const sorted = [...s.records].sort((a, b) => (b.fecha || 0) - (a.fecha || 0));
-      const latest = sorted[0];
-      const bestNombre = sorted.find(r => r.nombre?.trim())?.nombre || "Sin nombre";
+    return Object.values(m).map((s) => {
+      const sorted = [...s.records].sort((a, b) => (b.dia || "") > (a.dia || "") ? 1 : -1);
+      const latest = sorted[0] || {};
       return {
         matricula: s.matricula,
-        nombre: bestNombre,
+        nombre: sorted.find((r) => r.nombre)?.nombre || "—",
+        ap: sorted.find((r) => r.ap)?.ap || "",
         sesiones: s.records.length,
-        servicios: [...s.servicesSet].join(", "),
-        ultimoServicio: latest?.servicio || "—",
-        ultimoAsesor: latest?.asesor || "—",
-        escuela: latest?.escuela || "—",
-        programa: latest?.programa || "—",
-        interes: latest?.interes || "—",
-        comunidad: latest?.comunidad || "—",
-        isCAGS: s.records.some(r => r.isCAGS),
-        isDIC25: s.records.some(r => r.isDIC25),
+        asistencias: s.records.filter((r) => r.estatus === "Asistencia").length,
+        ultimoAsesor: latest.atiende || "—",
+        ultimoServicio: latest.servicio || "—",
+        escuela: latest.escuela || "—",
+        programa: latest.programa || "—",
+        isCAGS: s.records.some(isCAGS),
+        isDIC25: s.records.some(isDIC25),
         records: s.records,
       };
     });
   }, [data]);
 
-  const asesores   = useMemo(() => [...new Set(data.map(r => r.asesor))].sort(),    [data]);
-  const escuelas   = useMemo(() => [...new Set(data.map(r => r.escuela))].sort(),   [data]);
-  const estatuses  = useMemo(() => [...new Set(data.map(r => r.estatus))].sort(),   [data]);
-  const intereses  = useMemo(() => [...new Set(data.map(r => r.interes))].sort(),   [data]);
-  const programas  = useMemo(() => [...new Set(data.map(r => r.programa))].sort(),  [data]);
-  const servicios  = useMemo(() => [...new Set(data.map(r => r.servicio))].sort(),  [data]);
-  const comunidades = useMemo(() => [...new Set(data.map(r => r.comunidad))].sort(), [data]);
+  const asesores = useMemo(() => [...new Set(data.map((r) => r.atiende).filter(Boolean))].sort(), [data]);
+  const escuelas = useMemo(() => [...new Set(data.map((r) => r.escuela).filter(Boolean))].sort(), [data]);
+  const estatuses = useMemo(() => [...new Set(data.map((r) => r.estatus).filter(Boolean))].sort(), [data]);
 
   const filtered = useMemo(() => {
     let f = students;
-    if (dSearch) {
-      const q = norm(dSearch);
-      f = f.filter(s => norm(s.nombre).includes(q) || norm(s.matricula).includes(q) || norm(s.programa).includes(q));
-    }
-    if (fAsesor)   f = f.filter(s => s.records.some(r => r.asesor    === fAsesor));
-    if (fEscuela)  f = f.filter(s => s.escuela  === fEscuela);
-    if (fEstatus)  f = f.filter(s => s.records.some(r => r.estatus   === fEstatus));
-    if (fInteres)  f = f.filter(s => s.interes  === fInteres);
-    if (fPrograma) f = f.filter(s => s.programa === fPrograma);
-    if (fServicio)  f = f.filter(s => s.records.some(r => r.servicio === fServicio));
-    if (fComunidad) f = f.filter(s => s.comunidad === fComunidad);
-    if (fCAGS)  f = f.filter(s => s.isCAGS);
-    if (fDIC25) f = f.filter(s => s.isDIC25);
-    return [...f].sort((a, b) => {
-      let av = a[sortCol] ?? "", bv = b[sortCol] ?? "";
-      if (typeof av === "string") av = norm(av);
-      if (typeof bv === "string") bv = norm(bv);
-      if (av < bv) return sortDir === "asc" ? -1 : 1;
-      if (av > bv) return sortDir === "asc" ? 1 : -1;
-      return 0;
-    });
-  }, [students, dSearch, fAsesor, fEscuela, fEstatus, fInteres, fPrograma, fServicio, fComunidad, fCAGS, fDIC25, sortCol, sortDir]);
+    if (dSearch) { const q = norm(dSearch); f = f.filter((s) => norm(s.nombre).includes(q) || norm(s.matricula).includes(q) || norm(s.ap).includes(q)); }
+    if (fAsesor) f = f.filter((s) => s.records.some((r) => r.atiende === fAsesor));
+    if (fEscuela) f = f.filter((s) => s.escuela === fEscuela);
+    if (fEstatus) f = f.filter((s) => s.records.some((r) => r.estatus === fEstatus));
+    if (fCAGS) f = f.filter((s) => s.isCAGS);
+    if (fDIC25) f = f.filter((s) => s.isDIC25);
+    return f.sort((a, b) => b.sesiones - a.sesiones);
+  }, [students, dSearch, fAsesor, fEscuela, fEstatus, fCAGS, fDIC25]);
 
-  useEffect(() => setPage(0), [dSearch, fAsesor, fEscuela, fEstatus, fInteres, fPrograma, fServicio, fComunidad, fCAGS, fDIC25, sortCol]);
+  useEffect(() => setPage(0), [dSearch, fAsesor, fEscuela, fEstatus, fCAGS, fDIC25]);
 
   const totalPages = Math.ceil(filtered.length / PAGE_SIZE);
   const displayed = dSearch ? filtered : filtered.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
 
-  const handleSort = (col) => {
-    if (col === sortCol) setSortDir(d => d === "asc" ? "desc" : "asc");
-    else { setSortCol(col); setSortDir("desc"); }
-  };
-
-  const clearFilters = () => { setSearch(""); setFAsesor(""); setFEscuela(""); setFEstatus(""); setFInteres(""); setFPrograma(""); setFServicio(""); setFComunidad(""); setFCAGS(false); setFDIC25(false); setPage(0); };
-
-  const dlFiltered = () => {
-    if (!filtered.length) return;
-    dlXl(filtered.map(s => ({
-      Matrícula: s.matricula, Nombre: s.nombre, Sesiones: s.sesiones,
-      CAGS: s.isCAGS ? "Sí" : "No", DIC25: s.isDIC25 ? "Sí" : "No",
-      "Último servicio": s.ultimoServicio, "Último asesor": s.ultimoAsesor,
-      Escuela: s.escuela, Programa: s.programa, Interés: s.interes, Comunidad: s.comunidad
-    })), "alumnos_filtrados.xlsx");
-  };
-
-  const SortTh = ({ col, label, align }) => {
-    const active = sortCol === col;
-    return (
-      <th onClick={() => handleSort(col)} style={{ textAlign:align||"left", padding:"8px 10px", fontSize:10, textTransform:"uppercase", letterSpacing:1, color:active?"#a5b4fc":"#6b6f82", fontWeight:600, whiteSpace:"nowrap", cursor:"pointer", userSelect:"none" }}>
-        {label} {active ? (sortDir === "asc" ? "↑" : "↓") : <span style={{ opacity:0.3 }}>↕</span>}
-      </th>
-    );
-  };
-
   return (
     <div>
-      {selectedStudent && <StudentModal student={selectedStudent} records={selectedStudent.records} onClose={() => setSelectedStudent(null)} />}
-      <div style={{ display:"flex", gap:8, marginBottom:10, flexWrap:"wrap", alignItems:"center" }}>
-        <input style={{ ...S.input, maxWidth:280 }} placeholder="Buscar nombre, matrícula, programa..." value={search} onChange={e => setSearch(e.target.value)} />
-        <select style={S.select} value={fAsesor} onChange={e => setFAsesor(e.target.value)}>
+      {selectedStudent && <StudentModal matricula={selectedStudent.matricula} records={selectedStudent.records} onClose={() => setSelectedStudent(null)} />}
+      <div style={{ display: "flex", gap: 8, marginBottom: 14, flexWrap: "wrap", alignItems: "center" }}>
+        <input style={{ ...S.input, maxWidth: 280 }} placeholder="Buscar nombre o matrícula..." value={search} onChange={(e) => setSearch(e.target.value)} />
+        <select style={S.select} value={fAsesor} onChange={(e) => setFAsesor(e.target.value)}>
           <option value="">Todos los asesores</option>
-          {asesores.map(a => <option key={a} value={a}>{a}</option>)}
+          {asesores.map((a) => <option key={a} value={a}>{a}</option>)}
         </select>
-        <select style={S.select} value={fEscuela} onChange={e => setFEscuela(e.target.value)}>
+        <select style={S.select} value={fEscuela} onChange={(e) => setFEscuela(e.target.value)}>
           <option value="">Todas las escuelas</option>
-          {escuelas.map(e => <option key={e} value={e}>{e}</option>)}
+          {escuelas.map((e) => <option key={e} value={e}>{e}</option>)}
         </select>
-        <select style={S.select} value={fEstatus} onChange={e => setFEstatus(e.target.value)}>
+        <select style={S.select} value={fEstatus} onChange={(e) => setFEstatus(e.target.value)}>
           <option value="">Todos los estatus</option>
-          {estatuses.map(e => <option key={e} value={e}>{e}</option>)}
+          {estatuses.map((s) => <option key={s} value={s}>{s}</option>)}
         </select>
-      </div>
-      <div style={{ display:"flex", gap:8, marginBottom:14, flexWrap:"wrap", alignItems:"center" }}>
-        <select style={S.select} value={fInteres} onChange={e => setFInteres(e.target.value)}>
-          <option value="">Todo interés</option>
-          {intereses.map(v => <option key={v} value={v}>{v}</option>)}
-        </select>
-        <select style={S.select} value={fPrograma} onChange={e => setFPrograma(e.target.value)}>
-          <option value="">Todos los programas</option>
-          {programas.map(v => <option key={v} value={v}>{v}</option>)}
-        </select>
-        <select style={S.select} value={fServicio} onChange={e => setFServicio(e.target.value)}>
-          <option value="">Todos los servicios</option>
-          {servicios.map(v => <option key={v} value={v}>{v}</option>)}
-        </select>
-        <select style={S.select} value={fComunidad} onChange={e => setFComunidad(e.target.value)}>
-          <option value="">Todas las comunidades</option>
-          {comunidades.map(v => <option key={v} value={v}>{v}</option>)}
-        </select>
-        <button onClick={() => { setFCAGS(v => !v); setFDIC25(false); }}
-          style={{ ...S.btn(fCAGS ? "#a855f7" : "#8e92a6"), fontSize:11, padding:"5px 12px", opacity: fDIC25 ? 0.4 : 1 }}>
+        <button onClick={() => { setFCAGS((v) => !v); setFDIC25(false); }}
+          style={{ ...S.btn(fCAGS ? "#a855f7" : "#8e92a6"), fontSize: 11, padding: "5px 12px", opacity: fDIC25 ? 0.4 : 1 }}>
           ★ Solo CAGS
         </button>
-        <button onClick={() => { setFDIC25(v => !v); setFCAGS(false); }}
-          style={{ ...S.btn(fDIC25 ? "#22d3ee" : "#8e92a6"), fontSize:11, padding:"5px 12px", opacity: fCAGS ? 0.4 : 1 }}>
+        <button onClick={() => { setFDIC25((v) => !v); setFCAGS(false); }}
+          style={{ ...S.btn(fDIC25 ? "#22d3ee" : "#8e92a6"), fontSize: 11, padding: "5px 12px", opacity: fCAGS ? 0.4 : 1 }}>
           ✓ Solo DIC25
         </button>
-        <Bt color="#8e92a6" onClick={clearFilters} style={{ fontSize:11 }}>Limpiar</Bt>
-        <Bt color="#10b981" onClick={dlFiltered} style={{ fontSize:11, padding:"5px 12px" }}>↓ Excel</Bt>
-        <span style={{ ...S.mono, fontSize:11, color:"#6b6f82", marginLeft:"auto" }}>
-          {filtered.length} alumno{filtered.length !== 1 ? "s" : ""}{dSearch ? " encontrado" + (filtered.length !== 1 ? "s" : "") : ""}
-        </span>
+        <Bt color="#8e92a6" onClick={() => { setSearch(""); setFAsesor(""); setFEscuela(""); setFEstatus(""); setFCAGS(false); setFDIC25(false); }} style={{ fontSize: 11 }}>Limpiar</Bt>
+        <span style={{ ...S.mono, fontSize: 11, color: "#6b6f82", marginLeft: "auto" }}>{filtered.length} alumnos</span>
       </div>
 
-      <div style={{ overflowX:"auto" }}>
-        <table style={{ width:"100%", borderCollapse:"collapse", fontSize:12 }}>
-          <thead><tr style={{ borderBottom:"1px solid rgba(255,255,255,0.08)" }}>
-            <SortTh col="matricula" label="Matrícula" />
-            <SortTh col="nombre" label="Nombre" />
-            <SortTh col="sesiones" label="Sesiones" align="center" />
-            <th style={{ textAlign:"left", padding:"8px 10px", fontSize:10, textTransform:"uppercase", letterSpacing:1, color:"#6b6f82", fontWeight:600, whiteSpace:"nowrap" }}>Servicios</th>
-            <SortTh col="ultimoServicio" label="Último servicio" />
-            <SortTh col="ultimoAsesor" label="Asesor" />
-            <SortTh col="escuela" label="Escuela" />
-            <SortTh col="programa" label="Programa" />
-            <SortTh col="interes" label="Interés" />
-            <SortTh col="comunidad" label="Comunidad" />
-          </tr></thead>
-          <tbody>{displayed.map(s => (
-            <tr key={s.matricula} style={{ borderBottom:"1px solid rgba(255,255,255,0.04)", cursor:"pointer" }}
-              onClick={() => setSelectedStudent(s)}
-              onMouseEnter={e => e.currentTarget.style.background="rgba(99,102,241,0.06)"}
-              onMouseLeave={e => e.currentTarget.style.background="transparent"}>
-              <td style={{ padding:"8px 10px", ...S.mono, fontSize:11, color:"#a5b4fc" }}><Highlight text={s.matricula} query={dSearch} /></td>
-              <td style={{ padding:"8px 10px", fontWeight:500 }}>
-                <Highlight text={s.nombre} query={dSearch} />
-                {s.isCAGS  && <span style={{ ...S.badge("#a855f7"), marginLeft:6, fontSize:9 }}>CAGS</span>}
-                {s.isDIC25 && <span style={{ ...S.badge("#22d3ee"), marginLeft:6, fontSize:9 }}>DIC25</span>}
-              </td>
-              <td style={{ padding:"8px 10px", textAlign:"center" }}><span style={S.badge("#6366f1")}>{s.sesiones}</span></td>
-              <td style={{ padding:"8px 10px", maxWidth:180, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap", fontSize:11, color:"#8e92a6" }}>{s.servicios}</td>
-              <td style={{ padding:"8px 10px", fontSize:11 }}>{s.ultimoServicio}</td>
-              <td style={{ padding:"8px 10px", fontSize:11 }}>{s.ultimoAsesor}</td>
-              <td style={{ padding:"8px 10px", fontSize:11, color:"#8e92a6" }}>{s.escuela}</td>
-              <td style={{ padding:"8px 10px" }}><span style={S.badge("#3b82f6")}><Highlight text={s.programa} query={dSearch} /></span></td>
-              <td style={{ padding:"8px 10px", fontSize:11, color:"#8e92a6" }}>{s.interes}</td>
-              <td style={{ padding:"8px 10px", fontSize:11, color:"#8e92a6" }}>{s.comunidad}</td>
+      <div style={{ overflowX: "auto" }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+          <thead>
+            <tr style={{ borderBottom: "1px solid rgba(255,255,255,0.08)" }}>
+              {["Matrícula","Nombre","Sesiones","Asistencias","Último asesor","Último servicio","Escuela","Programa"].map((h) => (
+                <th key={h} style={{ textAlign: "left", padding: "8px 10px", fontSize: 10, textTransform: "uppercase", letterSpacing: 1, color: "#6b6f82", fontWeight: 600, whiteSpace: "nowrap" }}>{h}</th>
+              ))}
             </tr>
-          ))}</tbody>
+          </thead>
+          <tbody>
+            {displayed.map((s) => (
+              <tr key={s.matricula} style={{ borderBottom: "1px solid rgba(255,255,255,0.04)", cursor: "pointer" }}
+                onClick={() => setSelectedStudent(s)}
+                onMouseEnter={(e) => e.currentTarget.style.background = "rgba(99,102,241,0.06)"}
+                onMouseLeave={(e) => e.currentTarget.style.background = "transparent"}>
+                <td style={{ padding: "8px 10px", ...S.mono, fontSize: 11, color: "#a5b4fc" }}>{s.matricula}</td>
+                <td style={{ padding: "8px 10px", fontWeight: 500 }}>
+                  {[s.nombre, s.ap].filter(Boolean).join(" ")}
+                  {s.isCAGS && <span style={{ ...S.badge("#a855f7"), marginLeft: 6, fontSize: 9 }}>CAGS</span>}
+                  {s.isDIC25 && <span style={{ ...S.badge("#22d3ee"), marginLeft: 6, fontSize: 9 }}>DIC25</span>}
+                </td>
+                <td style={{ padding: "8px 10px", textAlign: "center" }}><span style={S.badge("#6366f1")}>{s.sesiones}</span></td>
+                <td style={{ padding: "8px 10px", textAlign: "center" }}><span style={S.badge("#10b981")}>{s.asistencias}</span></td>
+                <td style={{ padding: "8px 10px", fontSize: 11, color: "#8e92a6" }}>{s.ultimoAsesor}</td>
+                <td style={{ padding: "8px 10px", fontSize: 11, maxWidth: 180, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{s.ultimoServicio}</td>
+                <td style={{ padding: "8px 10px", fontSize: 11, color: "#8e92a6" }}>{s.escuela}</td>
+                <td style={{ padding: "8px 10px" }}><span style={S.badge("#3b82f6")}>{s.programa}</span></td>
+              </tr>
+            ))}
+          </tbody>
         </table>
-
-        {dSearch && filtered.length === 0 && (
-          <div style={{ textAlign:"center", padding:40, color:"#6b6f82", fontSize:13 }}>
-            No se encontraron alumnos para <span style={{ color:"#a5b4fc" }}>"{search}"</span>
-          </div>
+        {filtered.length === 0 && (
+          <div style={{ textAlign: "center", padding: 40, color: "#6b6f82", fontSize: 13 }}>Sin resultados</div>
         )}
-
         {!dSearch && totalPages > 1 && (
-          <div style={{ display:"flex", justifyContent:"center", alignItems:"center", gap:10, padding:16 }}>
-            <Bt color="#6366f1" onClick={() => setPage(p => Math.max(0, p - 1))} style={{ padding:"4px 14px", fontSize:12, opacity:page===0?0.3:1, pointerEvents:page===0?"none":"auto" }}>← Ant</Bt>
-            <span style={{ ...S.mono, fontSize:12, color:"#8e92a6" }}>Página {page + 1} de {totalPages} · {filtered.length} alumnos</span>
-            <Bt color="#6366f1" onClick={() => setPage(p => Math.min(totalPages - 1, p + 1))} style={{ padding:"4px 14px", fontSize:12, opacity:page===totalPages-1?0.3:1, pointerEvents:page===totalPages-1?"none":"auto" }}>Sig →</Bt>
+          <div style={{ display: "flex", justifyContent: "center", alignItems: "center", gap: 10, padding: 16 }}>
+            <Bt color="#6366f1" onClick={() => setPage((p) => Math.max(0, p - 1))} style={{ padding: "4px 14px", fontSize: 12, opacity: page === 0 ? 0.3 : 1, pointerEvents: page === 0 ? "none" : "auto" }}>← Ant</Bt>
+            <span style={{ ...S.mono, fontSize: 12, color: "#8e92a6" }}>Página {page + 1} de {totalPages} · {filtered.length} alumnos</span>
+            <Bt color="#6366f1" onClick={() => setPage((p) => Math.min(totalPages - 1, p + 1))} style={{ padding: "4px 14px", fontSize: 12, opacity: page === totalPages - 1 ? 0.3 : 1, pointerEvents: page === totalPages - 1 ? "none" : "auto" }}>Sig →</Bt>
           </div>
         )}
       </div>
@@ -1016,274 +1174,71 @@ function TabAlumnos({ data }) {
   );
 }
 
-/* ═══════════════ TAB: PERSONALIZADO ═══════════════ */
-function TabCustom({ data }) {
-  const [groupBy, setGroupBy] = useState("servicio");
-  const [chartType, setChartType] = useState("barH");
-  const [filterDim, setFilterDim] = useState("");
-  const [filterVal, setFilterVal] = useState("");
-  const [dateFrom, setDateFrom] = useState("");
-  const [dateTo, setDateTo] = useState("");
-  const chartRef = useRef();
-
-  const filtered = useMemo(() => {
-    let f = data;
-    if (filterDim && filterVal) f = f.filter(r => r[filterDim] === filterVal);
-    if (dateFrom) { const d = new Date(dateFrom + "T00:00:00"); f = f.filter(r => r.fecha && r.fecha >= d); }
-    if (dateTo) { const d = new Date(dateTo + "T23:59:59"); f = f.filter(r => r.fecha && r.fecha <= d); }
-    return f;
-  }, [data, filterDim, filterVal, dateFrom, dateTo]);
-
-  const grouped = useMemo(() => countBy(filtered, groupBy), [filtered, groupBy]);
-  const total = filtered.length;
-
-  const filterValues = useMemo(() => {
-    if (!filterDim) return [];
-    return [...new Set(data.map(r => r[filterDim]))].sort();
-  }, [data, filterDim]);
-
-  const dimLabels = { servicio:"Servicio", asesor:"Asesor", escuela:"Escuela", programa:"Programa", estatus:"Estatus", interes:"Interés", modalidad:"Modalidad", comunidad:"Comunidad", semestre:"Semestre" };
-
-  return (
-    <div>
-      <Cd>
-        <div style={{ display:"flex", gap:12, flexWrap:"wrap", alignItems:"center" }}>
-          <div>
-            <div style={{ fontSize:10, color:"#6b6f82", marginBottom:4, textTransform:"uppercase", letterSpacing:1 }}>Agrupar por</div>
-            <select style={S.select} value={groupBy} onChange={e => setGroupBy(e.target.value)}>
-              {DIMS.map(d => <option key={d} value={d}>{dimLabels[d]}</option>)}
-            </select>
-          </div>
-          <div>
-            <div style={{ fontSize:10, color:"#6b6f82", marginBottom:4, textTransform:"uppercase", letterSpacing:1 }}>Tipo de gráfica</div>
-            <select style={S.select} value={chartType} onChange={e => setChartType(e.target.value)}>
-              <option value="barH">Barras horizontal</option>
-              <option value="barV">Barras vertical</option>
-              <option value="pie">Pie / Dona</option>
-            </select>
-          </div>
-          <div>
-            <div style={{ fontSize:10, color:"#6b6f82", marginBottom:4, textTransform:"uppercase", letterSpacing:1 }}>Filtrar por</div>
-            <select style={S.select} value={filterDim} onChange={e => { setFilterDim(e.target.value); setFilterVal(""); }}>
-              <option value="">Sin filtro</option>
-              {DIMS.map(d => <option key={d} value={d}>{dimLabels[d]}</option>)}
-            </select>
-          </div>
-          {filterDim && (
-            <div>
-              <div style={{ fontSize:10, color:"#6b6f82", marginBottom:4, textTransform:"uppercase", letterSpacing:1 }}>Valor</div>
-              <select style={S.select} value={filterVal} onChange={e => setFilterVal(e.target.value)}>
-                <option value="">Todos</option>
-                {filterValues.map(v => <option key={v} value={v}>{v}</option>)}
-              </select>
-            </div>
-          )}
-          <div>
-            <div style={{ fontSize:10, color:"#6b6f82", marginBottom:4, textTransform:"uppercase", letterSpacing:1 }}>Desde</div>
-            <input type="date" style={{ ...S.input, width:"auto" }} value={dateFrom} onChange={e => setDateFrom(e.target.value)} />
-          </div>
-          <div>
-            <div style={{ fontSize:10, color:"#6b6f82", marginBottom:4, textTransform:"uppercase", letterSpacing:1 }}>Hasta</div>
-            <input type="date" style={{ ...S.input, width:"auto" }} value={dateTo} onChange={e => setDateTo(e.target.value)} />
-          </div>
-          {(dateFrom || dateTo) && (
-            <div style={{ alignSelf:"flex-end" }}>
-              <Bt color="#ef4444" onClick={() => { setDateFrom(""); setDateTo(""); }} style={{ fontSize:11, padding:"8px 12px" }}>✕ Fechas</Bt>
-            </div>
-          )}
-        </div>
-      </Cd>
-
-      <ChartCard title={`${dimLabels[groupBy] || groupBy} ${filterVal ? `(filtrado: ${filterVal})` : ""}`} chartRef={chartRef} filename={`custom_${groupBy}.png`}>
-        <div ref={chartRef}>
-          {chartType === "barH" && (
-            <ResponsiveContainer width="100%" height={Math.max(200, grouped.length * 30)}>
-              <BarChart data={grouped} layout="vertical" margin={{ left:120, right:20, top:5, bottom:5 }}>
-                <XAxis type="number" tick={{ fill:"#6b6f82", fontSize:10 }} />
-                <YAxis type="category" dataKey="name" tick={{ fill:"#8e92a6", fontSize:10 }} width={115} />
-                <Tooltip content={<TT />} />
-                <Bar dataKey="value" radius={[0,6,6,0]}>{grouped.map((_, i) => <Cell key={i} fill={CHART_COLORS[i % CHART_COLORS.length]} />)}</Bar>
-              </BarChart>
-            </ResponsiveContainer>
-          )}
-          {chartType === "barV" && (
-            <ResponsiveContainer width="100%" height={300}>
-              <BarChart data={grouped} margin={{ top:5, right:20, bottom:40, left:10 }}>
-                <XAxis dataKey="name" tick={{ fill:"#6b6f82", fontSize:9 }} angle={-35} textAnchor="end" height={60} />
-                <YAxis tick={{ fill:"#6b6f82", fontSize:10 }} />
-                <Tooltip content={<TT />} />
-                <Bar dataKey="value" radius={[6,6,0,0]}>{grouped.map((_, i) => <Cell key={i} fill={CHART_COLORS[i % CHART_COLORS.length]} />)}</Bar>
-              </BarChart>
-            </ResponsiveContainer>
-          )}
-          {chartType === "pie" && (
-            <ResponsiveContainer width="100%" height={300}>
-              <PieChart>
-                <Pie data={grouped} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={100} innerRadius={40} paddingAngle={3}>
-                  {grouped.map((_, i) => <Cell key={i} fill={CHART_COLORS[i % CHART_COLORS.length]} />)}
-                </Pie>
-                <Tooltip content={<TT />} />
-                <Legend formatter={(v) => <span style={{ color:"#8e92a6", fontSize:11 }}>{v}</span>} />
-              </PieChart>
-            </ResponsiveContainer>
-          )}
-        </div>
-      </ChartCard>
-
-      <Cd>
-        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:12 }}>
-          <div style={S.h3}>Datos</div>
-          <div style={{ display:"flex", gap:8 }}>
-            <Bt color="#8e92a6" onClick={() => { const svg = chartRef.current?.querySelector("svg"); if(svg) dlPng(svg, `custom_${groupBy}.png`); }} style={{ fontSize:11, padding:"4px 10px" }}>📷 PNG</Bt>
-            <Bt color="#6366f1" onClick={() => dlXl(grouped.map(g => ({ [dimLabels[groupBy]]:g.name, Cantidad:g.value, Porcentaje:`${((g.value/total)*100).toFixed(1)}%` })), `custom_${groupBy}.xlsx`)} style={{ fontSize:11, padding:"4px 10px" }}>↓ Excel</Bt>
-          </div>
-        </div>
-        <table style={{ width:"100%", borderCollapse:"collapse", fontSize:12 }}>
-          <thead><tr style={{ borderBottom:"1px solid rgba(255,255,255,0.08)" }}>
-            {[dimLabels[groupBy],"Cantidad","%"].map(h => (
-              <th key={h} style={{ textAlign:"left", padding:"8px 10px", fontSize:10, textTransform:"uppercase", letterSpacing:1, color:"#6b6f82", fontWeight:600 }}>{h}</th>
-            ))}
-          </tr></thead>
-          <tbody>{grouped.map((g, i) => (
-            <tr key={i} style={{ borderBottom:"1px solid rgba(255,255,255,0.04)" }}
-              onMouseEnter={e => e.currentTarget.style.background="rgba(99,102,241,0.06)"}
-              onMouseLeave={e => e.currentTarget.style.background="transparent"}>
-              <td style={{ padding:"8px 10px" }}><span style={{ display:"inline-block", width:8, height:8, borderRadius:4, background:CHART_COLORS[i%CHART_COLORS.length], marginRight:8 }} />{g.name}</td>
-              <td style={{ padding:"8px 10px", ...S.mono }}>{g.value}</td>
-              <td style={{ padding:"8px 10px", ...S.mono, color:"#8e92a6" }}>{((g.value / total) * 100).toFixed(1)}%</td>
-            </tr>
-          ))}</tbody>
-        </table>
-      </Cd>
-    </div>
-  );
-}
-
-/* ═══════════════ UPLOAD SCREEN ═══════════════ */
-function UploadScreen({ onData, error, loading }) {
-  const [dragOver, setDragOver] = useState(false);
-  const inputRef = useRef();
-
-  const handleFile = (file) => {
-    if (!file) return;
-    if (!file.name.endsWith(".xlsx") && !file.name.endsWith(".xls")) { onData(null, "Solo se aceptan archivos .xlsx o .xls"); return; }
-    onData(file);
-  };
-
-  return (
-    <div style={{ minHeight:"100vh", display:"flex", alignItems:"center", justifyContent:"center", background:"radial-gradient(ellipse at 50% 0%, rgba(99,102,241,0.12) 0%, rgba(56,189,248,0.05) 40%, #0b1120 70%)" }}>
-      <div style={{ textAlign:"center", maxWidth:520 }}>
-        <div style={{ width:72, height:72, borderRadius:18, background:"linear-gradient(135deg, #6366f1, #8b5cf6)", display:"flex", alignItems:"center", justifyContent:"center", margin:"0 auto 24px", fontSize:32, fontWeight:800, color:"#fff" }}>C</div>
-        <h1 style={{ fontSize:28, fontWeight:800, marginBottom:4 }}>CVDP Empleabilidad</h1>
-        <p style={{ color:"#8e92a6", fontSize:14, marginBottom:32 }}>CRM Dashboard — Periodo FJ26</p>
-
-        <div
-          style={{ border:`2px dashed ${dragOver ? "#6366f1" : "rgba(255,255,255,0.12)"}`, borderRadius:18, padding:"48px 32px", cursor:"pointer", transition:"all .2s", background: dragOver ? "rgba(99,102,241,0.08)" : "rgba(255,255,255,0.02)" }}
-          onClick={() => inputRef.current?.click()}
-          onDragOver={e => { e.preventDefault(); setDragOver(true); }}
-          onDragLeave={() => setDragOver(false)}
-          onDrop={e => { e.preventDefault(); setDragOver(false); handleFile(e.dataTransfer.files[0]); }}>
-          <input ref={inputRef} type="file" accept=".xlsx,.xls" style={{ display:"none" }} onChange={e => handleFile(e.target.files[0])} />
-          <div style={{ fontSize:40, marginBottom:16, opacity:0.5 }}>📊</div>
-          <div style={{ fontSize:15, fontWeight:600, marginBottom:8 }}>
-            {loading ? (
-              <span style={{ display:"flex", alignItems:"center", gap:10, justifyContent:"center" }}>
-                <span style={{ display:"inline-block", width:18, height:18, border:"3px solid rgba(99,102,241,0.3)", borderTopColor:"#6366f1", borderRadius:"50%", animation:"spin 0.8s linear infinite" }} />
-                Procesando archivo…
-              </span>
-            ) : "Arrastra tu archivo Excel aquí"}
-          </div>
-          <div style={{ color:"#6b6f82", fontSize:12 }}>{loading ? "El archivo se procesa en segundo plano" : "o haz clic para seleccionar (.xlsx)"}</div>
-          <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
-        </div>
-
-        {error && (
-          <div style={{ marginTop:16, background:"rgba(239,68,68,0.1)", border:"1px solid rgba(239,68,68,0.3)", borderRadius:12, padding:"12px 16px", color:"#ef4444", fontSize:13 }}>
-            {error}
-          </div>
-        )}
-
-        <div style={{ marginTop:32, textAlign:"left", background:"rgba(255,255,255,0.03)", borderRadius:14, padding:20 }}>
-          <div style={{ fontSize:12, fontWeight:600, color:"#8e92a6", marginBottom:10 }}>Columnas esperadas:</div>
-          <div style={{ display:"flex", flexWrap:"wrap", gap:6 }}>
-            {["Matrícula","Nombre","AP","AM","Servicio","Atiende","Escuela","Programa","Estatus","Interés","Modalidad","Comunidad","Día"].map(c => (
-              <span key={c} style={{ ...S.badge("#6366f1"), fontSize:10 }}>{c}</span>
-            ))}
-          </div>
-          <div style={{ marginTop:12, fontSize:11, color:"#6b6f82" }}>Todo se procesa en tu navegador — ningún dato sale de tu computadora.</div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-/* ═══════════════ MAIN CRM COMPONENT ═══════════════ */
+/* ═══ MAIN CRM ═══ */
 export default function CRM() {
-  const [data, setData] = useState(null);
-  const [tab, setTab] = useState("dashboard");
-  const [error, setError] = useState(null);
-  const [loading, setLoading] = useState(false);
+  const [data, setData] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [tab, setTab] = useState("home");
 
-  const handleFile = useCallback(async (file, errMsg) => {
-    if (errMsg) { setError(errMsg); return; }
-    setLoading(true);
-    setError(null);
-    try {
-      const buffer = await file.arrayBuffer();
-      const worker = new Worker(new URL("./parseWorker.js", import.meta.url), { type: "module" });
-      worker.postMessage({ buffer }, [buffer]);
-      worker.onmessage = ({ data: res }) => {
-        worker.terminate();
-        if (res.ok) { setData(res.data); setTab("dashboard"); }
-        else setError(res.error);
-        setLoading(false);
-      };
-      worker.onerror = (e) => {
-        worker.terminate();
-        setError(e.message || "Error procesando el archivo");
-        setLoading(false);
-      };
-    } catch (e) {
-      setError(e.message || "Error leyendo el archivo");
-      setLoading(false);
-    }
+  const fetchData = useCallback(async () => {
+    const { data: rows, error } = await supabase
+      .from("asesorias")
+      .select("*")
+      .order("dia", { ascending: false })
+      .order("hora", { ascending: true });
+    if (!error) setData(rows || []);
+    setLoading(false);
   }, []);
 
-  const reset = () => { setData(null); setError(null); setTab("dashboard"); };
+  useEffect(() => { fetchData(); }, [fetchData]);
 
-  if (!data) return <UploadScreen onData={handleFile} error={error} loading={loading} />;
+  const handleStatusChange = async (id, newStatus) => {
+    await supabase.from("asesorias").update({ estatus: newStatus }).eq("id", id);
+    setData((prev) => prev.map((r) => r.id === id ? { ...r, estatus: newStatus } : r));
+  };
+
+  if (loading) {
+    return (
+      <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", background: "#0b1120" }}>
+        <div style={{ textAlign: "center" }}>
+          <div style={{ width: 48, height: 48, border: "4px solid rgba(99,102,241,0.2)", borderTopColor: "#6366f1", borderRadius: "50%", animation: "spin 0.8s linear infinite", margin: "0 auto 16px" }} />
+          <div style={{ color: "#8e92a6", fontSize: 14 }}>Cargando asesorías…</div>
+          <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+        </div>
+      </div>
+    );
+  }
 
   return (
-    <div style={{ minHeight:"100vh" }}>
-      {/* HEADER */}
-      <header style={{ position:"sticky", top:0, zIndex:100, background:"rgba(11,17,32,0.92)", backdropFilter:"blur(16px)", borderBottom:"1px solid rgba(255,255,255,0.06)", padding:"0 24px" }}>
-        <div style={{ display:"flex", alignItems:"center", height:56, maxWidth:1400, margin:"0 auto" }}>
-          <div style={{ display:"flex", alignItems:"center", gap:10, marginRight:32 }}>
-            <div style={{ width:30, height:30, borderRadius:8, background:"linear-gradient(135deg, #6366f1, #8b5cf6)", display:"flex", alignItems:"center", justifyContent:"center", fontSize:14, fontWeight:800, color:"#fff" }}>C</div>
-            <span style={{ fontWeight:700, fontSize:14 }}>CVDP <span style={{ color:"#8e92a6", fontWeight:400 }}>Empleabilidad</span></span>
+    <div style={{ minHeight: "100vh" }}>
+      <header style={{ position: "sticky", top: 0, zIndex: 100, background: "rgba(11,17,32,0.92)", backdropFilter: "blur(16px)", borderBottom: "1px solid rgba(255,255,255,0.06)", padding: "0 24px" }}>
+        <div style={{ display: "flex", alignItems: "center", height: 56, maxWidth: 1400, margin: "0 auto" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, marginRight: 32 }}>
+            <div style={{ width: 30, height: 30, borderRadius: 8, background: "linear-gradient(135deg, #6366f1, #8b5cf6)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 14, fontWeight: 800, color: "#fff" }}>C</div>
+            <span style={{ fontWeight: 700, fontSize: 14 }}>CVDP <span style={{ color: "#8e92a6", fontWeight: 400 }}>Empleabilidad</span></span>
           </div>
-          <nav style={{ display:"flex", gap:0, flex:1 }}>
-            {TABS.map(t => (
+          <nav style={{ display: "flex", gap: 0, flex: 1 }}>
+            {TABS.map((t) => (
               <button key={t.id} onClick={() => setTab(t.id)}
-                style={{ background:"none", border:"none", borderBottom: tab === t.id ? "2px solid #6366f1" : "2px solid transparent", color: tab === t.id ? "#a5b4fc" : "#7d8296", padding:"16px 16px", fontSize:13, fontWeight: tab === t.id ? 600 : 400, cursor:"pointer", fontFamily:"'Plus Jakarta Sans'", transition:"all .2s", display:"flex", alignItems:"center", gap:6 }}>
-                <span style={{ fontSize:14 }}>{t.icon}</span> {t.label}
+                style={{ background: "none", border: "none", borderBottom: tab === t.id ? "2px solid #6366f1" : "2px solid transparent", color: tab === t.id ? "#a5b4fc" : "#7d8296", padding: "16px 16px", fontSize: 13, fontWeight: tab === t.id ? 600 : 400, cursor: "pointer", fontFamily: "'Plus Jakarta Sans'", transition: "all .2s", display: "flex", alignItems: "center", gap: 6 }}>
+                <span style={{ fontSize: 14 }}>{t.icon}</span> {t.label}
               </button>
             ))}
           </nav>
-          <div style={{ display:"flex", alignItems:"center", gap:12 }}>
-            <span style={{ ...S.mono, fontSize:11, color:"#6b6f82" }}>{data.length.toLocaleString()} registros</span>
-            <Bt color="#ef4444" onClick={reset} style={{ fontSize:11, padding:"5px 12px" }}>Nuevo archivo</Bt>
+          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+            <span style={{ ...S.mono, fontSize: 11, color: "#6b6f82" }}>{data.length.toLocaleString()} registros</span>
+            <Bt color="#6366f1" onClick={fetchData} style={{ fontSize: 11, padding: "5px 12px" }}>↻ Actualizar</Bt>
           </div>
         </div>
       </header>
 
-      {/* CONTENT */}
-      <main style={{ maxWidth:1400, margin:"0 auto", padding:"24px 24px 60px" }}>
+      <main style={{ maxWidth: 1400, margin: "0 auto", padding: "24px 24px 60px" }}>
+        {tab === "home"      && <TabHome data={data} onStatusChange={handleStatusChange} />}
+        {tab === "asesorias" && <TabAsesorias data={data} onRefresh={fetchData} />}
         {tab === "dashboard" && <TabDashboard data={data} />}
-        {tab === "asesores" && <TabAsesores data={data} />}
-        {tab === "pipeline" && <TabPipeline data={data} />}
-        {tab === "alumnos" && <TabAlumnos data={data} />}
-        {tab === "custom" && <TabCustom data={data} />}
+        {tab === "asesores"  && <TabAsesores data={data} />}
+        {tab === "pipeline"  && <TabPipeline data={data} />}
+        {tab === "alumnos"   && <TabAlumnos data={data} />}
       </main>
     </div>
   );
