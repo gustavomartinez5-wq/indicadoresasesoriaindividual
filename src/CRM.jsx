@@ -1817,9 +1817,6 @@ function AsesorModal({ asesor, records, onClose }) {
 
   return (
     <>
-      {selectedStudent && (
-        <StudentModal matricula={selectedStudent.matricula} records={selectedStudent.records} onClose={() => setSelectedStudent(null)} />
-      )}
       <Modal onClose={onClose}>
         <div style={{ fontSize: 20, fontWeight: 700, marginBottom: 20 }}>{asesor}</div>
         <div style={S.grid(5)}>
@@ -1862,6 +1859,9 @@ function AsesorModal({ asesor, records, onClose }) {
           </div>
         </div>
       </Modal>
+      {selectedStudent && (
+        <StudentModal matricula={selectedStudent.matricula} records={selectedStudent.records} onClose={() => setSelectedStudent(null)} />
+      )}
     </>
   );
 }
