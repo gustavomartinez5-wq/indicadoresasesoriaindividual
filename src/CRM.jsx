@@ -44,6 +44,14 @@ function fmtDate(d) {
 function todayISO() {
   return new Date().toISOString().slice(0, 10);
 }
+function sortGridRows(arr) {
+  const nullRows = arr.filter((r) => r.id === null);
+  const saved = arr.filter((r) => r.id !== null).sort((a, b) => {
+    if ((b.dia || "") !== (a.dia || "")) return (b.dia || "") > (a.dia || "") ? 1 : -1;
+    return (a.hora || "") < (b.hora || "") ? -1 : (a.hora || "") > (b.hora || "") ? 1 : 0;
+  });
+  return [...nullRows, ...saved];
+}
 function countBy(arr, key) {
   const map = {};
   arr.forEach((r) => { const v = r[key] || "N/A"; map[v] = (map[v] || 0) + 1; });
@@ -297,6 +305,12 @@ function StudentModal({ matricula, records, onClose }) {
 /* ═══ TAB HOME ═══ */
 function TabHome({ data, onStatusChange }) {
   const today = todayISO();
+  const [now, setNow] = useState(() => new Date());
+  useEffect(() => {
+    const t = setInterval(() => setNow(new Date()), 60000);
+    return () => clearInterval(t);
+  }, []);
+
   const hoy = useMemo(() =>
     data.filter((r) => r.dia === today).sort((a, b) => (a.hora || "") < (b.hora || "") ? -1 : 1),
     [data, today]
@@ -352,7 +366,7 @@ function TabHome({ data, onStatusChange }) {
             <span style={{ fontWeight: 700, fontSize: 14, color: "#a5b4fc" }}>Asesorías de hoy</span>
           </div>
           {hoy.map((r) => (
-            <HomeRow key={r.id} record={r} onStatusChange={onStatusChange} />
+            <HomeRow key={r.id} record={r} onStatusChange={onStatusChange} now={now} />
           ))}
         </Cd>
       )}
@@ -363,9 +377,19 @@ function TabHome({ data, onStatusChange }) {
   );
 }
 
-function HomeRow({ record: r, onStatusChange }) {
+function HomeRow({ record: r, onStatusChange, now }) {
   const [saving, setSaving] = useState(false);
   const current = r.estatus;
+
+  const isPastDue = useMemo(() => {
+    if (current !== "Agendado" || r.modalidad === "Virtual" || !r.hora) return false;
+    const parts = r.hora.split(":");
+    const hh = parseInt(parts[0], 10), mm = parseInt(parts[1], 10);
+    if (isNaN(hh) || isNaN(mm)) return false;
+    const sessionTime = new Date(now);
+    sessionTime.setHours(hh, mm, 0, 0);
+    return (now - sessionTime) > 15 * 60 * 1000;
+  }, [current, r.modalidad, r.hora, now]);
 
   const handleStatus = async (clicked) => {
     if (saving) return;
@@ -384,19 +408,26 @@ function HomeRow({ record: r, onStatusChange }) {
     <div style={{
       display: "flex", alignItems: "center", gap: 16, padding: "14px 20px",
       borderBottom: "1px solid rgba(255,255,255,0.04)",
+      borderLeft: isPastDue ? "3px solid rgba(245,158,11,0.5)" : "3px solid transparent",
       background: current === "Asistencia" ? "rgba(16,185,129,0.04)"
         : current === "Falta" ? "rgba(239,68,68,0.04)"
         : current === "Cancelación" ? "rgba(139,92,246,0.04)"
         : current === "Express" ? "rgba(245,158,11,0.04)"
+        : isPastDue ? "rgba(245,158,11,0.06)"
         : "transparent",
       transition: "background .2s",
     }}
-      onMouseEnter={(e) => { if (current === "Agendado") e.currentTarget.style.background = "rgba(99,102,241,0.05)"; }}
-      onMouseLeave={(e) => { if (current === "Agendado") e.currentTarget.style.background = "transparent"; }}
+      onMouseEnter={(e) => { if (current === "Agendado") e.currentTarget.style.background = isPastDue ? "rgba(245,158,11,0.1)" : "rgba(99,102,241,0.05)"; }}
+      onMouseLeave={(e) => { if (current === "Agendado") e.currentTarget.style.background = isPastDue ? "rgba(245,158,11,0.06)" : "transparent"; }}
     >
       {/* Hora */}
-      <div style={{ ...S.mono, fontSize: 18, fontWeight: 700, color: "#6366f1", minWidth: 60 }}>
-        {r.hora || "—"}
+      <div style={{ ...S.mono, minWidth: 60, textAlign: "center" }}>
+        <div style={{ fontSize: 18, fontWeight: 700, color: isPastDue ? "#f59e0b" : "#6366f1" }}>
+          {r.hora || "—"}
+        </div>
+        {isPastDue && (
+          <div style={{ fontSize: 9, color: "#f59e0b", fontWeight: 600, letterSpacing: 0.3, opacity: 0.85 }}>⏱ +15 min</div>
+        )}
       </div>
 
       {/* Info */}
@@ -774,7 +805,7 @@ function TabAsesorias({ data, onRefresh }) {
         const { error } = await supabase.from("asesorias").update(payload).eq("id", row.id);
         if (!error) {
           if (oldRow) setLastAction({ type: "update", id: row.id, oldRow });
-          setRows((prev) => prev.map((r, i) => i === rowIdx ? { ...r, ...payload } : r));
+          setRows((prev) => sortGridRows(prev.map((r, i) => i === rowIdx ? { ...r, ...payload } : r)));
         }
       } else {
         const { data: inserted } = await supabase.from("asesorias").insert(payload).select().single();
@@ -783,8 +814,8 @@ function TabAsesorias({ data, onRefresh }) {
           setRows((prev) => {
             const next = [...prev];
             next[rowIdx] = inserted;
-            if (!next.some((r) => r.id === null)) return [emptyRow(), ...next];
-            return next;
+            const base = next.some((r) => r.id === null) ? next : [emptyRow(), ...next];
+            return sortGridRows(base);
           });
         }
       }
@@ -1795,7 +1826,32 @@ export default function CRM() {
     setLoading(false);
   }, []);
 
-  useEffect(() => { fetchData(); }, [fetchData]);
+  // Marca como Falta cualquier sesión de días anteriores que quedó en "Agendado"
+  const autoMarkPastFaltas = useCallback(async () => {
+    const today = todayISO();
+    const { data: pastDue } = await supabase
+      .from("asesorias")
+      .select("id, modalidad")
+      .lt("dia", today)
+      .eq("estatus", "Agendado");
+    const ids = (pastDue || []).filter((r) => r.modalidad !== "Virtual").map((r) => r.id);
+    if (!ids.length) return;
+    await supabase.from("asesorias").update({ estatus: "Falta" }).in("id", ids);
+    setData((prev) => prev.map((r) => ids.includes(r.id) ? { ...r, estatus: "Falta" } : r));
+  }, []);
+
+  useEffect(() => {
+    fetchData().then(() => autoMarkPastFaltas());
+  }, [fetchData, autoMarkPastFaltas]);
+
+  // A medianoche, marcar automáticamente las que quedaron sin actualizar
+  useEffect(() => {
+    const t = setInterval(() => {
+      const n = new Date();
+      if (n.getHours() === 0 && n.getMinutes() <= 1) autoMarkPastFaltas();
+    }, 60000);
+    return () => clearInterval(t);
+  }, [autoMarkPastFaltas]);
 
   const handleStatusChange = async (id, newStatus) => {
     await supabase.from("asesorias").update({ estatus: newStatus }).eq("id", id);

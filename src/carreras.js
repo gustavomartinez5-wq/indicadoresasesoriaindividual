@@ -5,6 +5,7 @@ export const ESCUELAS_TEC = [
   { key: "EHE",  siglas: "EHE",  nombre: "Humanidades y Educación" },
   { key: "ECSG", siglas: "ECSG", nombre: "Ciencias Sociales y Gobierno" },
   { key: "EMCS", siglas: "EMCS", nombre: "Medicina y Ciencias de la Salud" },
+  { key: "POS",  siglas: "POS",  nombre: "Posgrado" },
 ];
 
 export const CARRERAS = [
@@ -54,6 +55,7 @@ export const CARRERAS = [
   { siglas: "LIT",  nombre: "Inteligencia de Negocios" },
   { siglas: "LPO",  nombre: "Psicología Organizacional" },
   { siglas: "BGB",  nombre: "B.A. in International Business" },
+  { siglas: "POS",  nombre: "Posgrado" },
 ];
 
 export const CARRERA_ESCUELA = {
@@ -67,6 +69,7 @@ export const CARRERA_ESCUELA = {
   LBC: "EMCS", LNB: "EMCS", LPS: "EMCS", MC:  "EMCS", MO:  "EMCS",
   LAE: "EN",   LAF: "EN",   LCPF: "EN",  LDE: "EN",   LDO: "EN",
   LEM: "EN",   LIN: "EN",   LIT: "EN",   LPO: "EN",   BGB: "EN",
+  POS: "POS",
 };
 
 // Puente retrocompatible: nombre completo (registros viejos) → key
@@ -77,7 +80,8 @@ export const ESCUELA_A_KEY = {
   "Escuela de Humanidades y Educación":        "EHE",
   "Escuela de Ciencias Sociales y Gobierno":   "ECSG",
   "Escuela de Medicina y Ciencias de la Salud":"EMCS",
-  EIC: "EIC", EN: "EN", EAAD: "EAAD", EHE: "EHE", ECSG: "ECSG", EMCS: "EMCS",
+  EIC: "EIC", EN: "EN", EAAD: "EAAD", EHE: "EHE", ECSG: "ECSG", EMCS: "EMCS", POS: "POS",
+  "Posgrado": "POS",
 };
 
 // Nombre completo de la carrera por siglas (para tooltips)
