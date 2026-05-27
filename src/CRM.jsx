@@ -1679,21 +1679,24 @@ function StudentOscars({ students, onSelect }) {
       faltas: s.records.filter((r) => r.estatus === "Falta").length,
       express: s.records.filter((r) => r.estatus === "Express").length,
       serviciosUniq: new Set(s.records.map((r) => r.servicio).filter(Boolean)).size,
+      asesoresUniq: new Set(s.records.map((r) => r.atiende).filter(Boolean)).size,
       rate: s.sesiones ? s.asistencias / s.sesiones : 0,
     }));
 
-    const bySession  = [...withFaltas].sort((a, b) => b.sesiones - a.sesiones)[0];
-    const byRate     = [...withFaltas].filter((s) => s.sesiones >= 3).sort((a, b) => b.rate - a.rate)[0];
-    const byFalta    = [...withFaltas].sort((a, b) => b.faltas - a.faltas)[0];
-    const bySrvs     = [...withFaltas].sort((a, b) => b.serviciosUniq - a.serviciosUniq)[0];
-    const byExpress  = [...withFaltas].filter((s) => s.express > 0).sort((a, b) => b.express - a.express)[0];
+    const bySession   = [...withFaltas].sort((a, b) => b.sesiones - a.sesiones)[0];
+    const byRate      = [...withFaltas].filter((s) => s.sesiones >= 3).sort((a, b) => b.rate - a.rate)[0];
+    const byFalta     = [...withFaltas].sort((a, b) => b.faltas - a.faltas)[0];
+    const bySrvs      = [...withFaltas].sort((a, b) => b.serviciosUniq - a.serviciosUniq)[0];
+    const byExpress   = [...withFaltas].filter((s) => s.express > 0).sort((a, b) => b.express - a.express)[0];
+    const byAsesores  = [...withFaltas].filter((s) => s.asesoresUniq > 1).sort((a, b) => b.asesoresUniq - a.asesoresUniq)[0];
 
     return [
-      { icon: "🥇", title: "Más asesorías",       student: bySession, stat: `${bySession.sesiones} sesiones`,          color: "#f59e0b" },
-      { icon: "⭐", title: "Mejor asistencia",      student: byRate,    stat: byRate ? `${(byRate.rate * 100).toFixed(0)}%` : null, color: "#10b981" },
-      { icon: "🎯", title: "Más servicios distintos", student: bySrvs,  stat: `${bySrvs.serviciosUniq} servicios`,      color: "#6366f1" },
-      { icon: "❌", title: "Más faltas",            student: byFalta.faltas > 0 ? byFalta : null, stat: byFalta.faltas > 0 ? `${byFalta.faltas} faltas` : null, color: "#ef4444" },
-      byExpress ? { icon: "⚡", title: "Rey del Express", student: byExpress, stat: `${byExpress.express} express`, color: "#8b5cf6" } : null,
+      { icon: "🥇", title: "Más asesorías",          student: bySession,  stat: `${bySession.sesiones} sesiones`,          color: "#f59e0b" },
+      { icon: "⭐", title: "Mejor asistencia",         student: byRate,     stat: byRate ? `${(byRate.rate * 100).toFixed(0)}%` : null, color: "#10b981" },
+      { icon: "🎯", title: "Más servicios distintos",  student: bySrvs,     stat: `${bySrvs.serviciosUniq} servicios`,       color: "#6366f1" },
+      { icon: "❌", title: "Más faltas",               student: byFalta.faltas > 0 ? byFalta : null, stat: byFalta.faltas > 0 ? `${byFalta.faltas} faltas` : null, color: "#ef4444" },
+      byExpress  ? { icon: "⚡", title: "Rey del Express",   student: byExpress,  stat: `${byExpress.express} express`,    color: "#8b5cf6" } : null,
+      byAsesores ? { icon: "🔄", title: "Cliente Frecuente", student: byAsesores, stat: `${byAsesores.asesoresUniq} asesores`, color: "#14b8a6" } : null,
     ].filter((a) => a && a.student && a.stat);
   }, [students]);
 
