@@ -363,8 +363,10 @@ function HomeRow({ record: r, onStatusChange }) {
   const [saving, setSaving] = useState(false);
   const current = r.estatus;
 
-  const handleStatus = async (newStatus) => {
-    if (saving || current === newStatus) return;
+  const handleStatus = async (clicked) => {
+    if (saving) return;
+    // Click on active status → deselect back to Agendado (pending)
+    const newStatus = current === clicked ? "Agendado" : clicked;
     setSaving(true);
     await onStatusChange(r.id, newStatus);
     setSaving(false);
@@ -413,7 +415,12 @@ function HomeRow({ record: r, onStatusChange }) {
       </div>
 
       {/* Botones de estatus */}
-      <div style={{ display: "flex", gap: 6, flexShrink: 0 }}>
+      <div style={{ display: "flex", gap: 6, flexShrink: 0, alignItems: "center" }}>
+        {current === "Agendado" && (
+          <span style={{ fontSize: 10, fontWeight: 600, color: "#6b6f82", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 8, padding: "5px 10px", letterSpacing: 0.3 }}>
+            ◌ Pendiente
+          </span>
+        )}
         {["Asistencia","Falta","Cancelación","Express"].map((s) => {
           const col = STATUS_COLORS[s];
           const active = current === s;
@@ -659,6 +666,15 @@ function TabAsesorias({ data, onRefresh }) {
   const [insertCount, setInsertCount] = useState(5);
   const [selectedIds, setSelectedIds] = useState(new Set());
   const [lastAction, setLastAction] = useState(null); // { type, ... } for undo
+  const [hoveredSep, setHoveredSep] = useState(null);
+  const [zoom, setZoom] = useState(() => {
+    try { return parseFloat(localStorage.getItem("asesoria-zoom") || "1"); } catch { return 1; }
+  });
+  const adjustZoom = (delta) => setZoom((prev) => {
+    const next = Math.round(Math.max(0.7, Math.min(1.4, prev + delta)) * 100) / 100;
+    try { localStorage.setItem("asesoria-zoom", next); } catch {}
+    return next;
+  });
   const inputRef = useRef();
   const dSearch = useDebounce(search, 200);
 
@@ -690,14 +706,50 @@ function TabAsesorias({ data, onRefresh }) {
   }, [rows, dSearch, fAsesor, fEstatus]);
 
   const existingItems = filteredWithIdx.filter(({ row }) => row.id !== null);
-  const newItems = filteredWithIdx.filter(({ row }) => row.id === null);
-  const totalGridPages = Math.max(1, Math.ceil(existingItems.length / pageSize));
+  const totalGridPages = Math.max(1, Math.ceil(filteredWithIdx.length / pageSize));
   const isLastGridPage = gridPage >= totalGridPages - 1;
-  const isFirstGridPage = gridPage === 0;
-  const pagedItems = [
-    ...(isFirstGridPage ? newItems : []),
-    ...existingItems.slice(gridPage * pageSize, (gridPage + 1) * pageSize),
-  ];
+  const pagedItems = filteredWithIdx.slice(gridPage * pageSize, (gridPage + 1) * pageSize);
+
+  // Row number map: rowsIdx → sequential number (only existing rows)
+  const rowNumMap = {};
+  existingItems.forEach(({ rowsIdx }, i) => { rowNumMap[rowsIdx] = i + 1; });
+
+  // Duplicate row: clone saved row, insert right below
+  const duplicateRow = (rowsIdx) => {
+    const row = rows[rowsIdx];
+    if (!row?.id) return;
+    const copy = { ...row, id: null, _k: ++_rowKey };
+    setRows((prev) => {
+      const next = [...prev];
+      next.splice(rowsIdx + 1, 0, copy);
+      return next;
+    });
+  };
+
+  // Render a hover-insert separator row
+  const renderSep = (key, insertAtIdx) => {
+    const isHov = hoveredSep === key;
+    return (
+      <tr key={key}
+        onMouseEnter={() => setHoveredSep(key)}
+        onMouseLeave={() => setHoveredSep(null)}
+        onClick={() => {
+          setRows((prev) => { const next = [...prev]; next.splice(insertAtIdx, 0, emptyRow()); return next; });
+          setHoveredSep(null);
+        }}
+        style={{ height: isHov ? 14 : 2, cursor: isHov ? "pointer" : "default", transition: "height .1s" }}>
+        <td colSpan={GRID_COLS.length + 2} style={{
+          padding: 0, textAlign: "center", overflow: "hidden", lineHeight: "14px",
+          background: isHov ? "rgba(99,102,241,0.15)" : "transparent",
+          borderTop: isHov ? "1.5px solid rgba(99,102,241,0.45)" : "none",
+          borderBottom: isHov ? "1.5px solid rgba(99,102,241,0.45)" : "none",
+          transition: "all .1s", color: "#6366f1", fontWeight: 800, fontSize: 13,
+        }}>
+          {isHov ? "＋" : null}
+        </td>
+      </tr>
+    );
+  };
 
   const updateRowLocal = (rowIdx, key, value) => {
     setRows((prev) => {
@@ -946,6 +998,14 @@ function TabAsesorias({ data, onRefresh }) {
         </select>
         <div style={{ marginLeft: "auto", display: "flex", gap: 8, alignItems: "center" }}>
           <span style={{ ...S.mono, fontSize: 11, color: "#6b6f82" }}>{data.length} registros</span>
+          {/* Zoom controls */}
+          <div style={{ display: "flex", alignItems: "center", gap: 2, border: "1px solid rgba(255,255,255,0.1)", borderRadius: 8, padding: "2px 4px" }}>
+            <button onClick={() => adjustZoom(-0.1)} disabled={zoom <= 0.7} title="Reducir tamaño"
+              style={{ background: "none", border: "none", color: "#8e92a6", cursor: zoom <= 0.7 ? "default" : "pointer", fontSize: 13, padding: "2px 5px", borderRadius: 5, lineHeight: 1 }}>A−</button>
+            <span style={{ fontSize: 10, color: "#6b6f82", minWidth: 28, textAlign: "center" }}>{Math.round(zoom * 100)}%</span>
+            <button onClick={() => adjustZoom(0.1)} disabled={zoom >= 1.4} title="Aumentar tamaño"
+              style={{ background: "none", border: "none", color: "#8e92a6", cursor: zoom >= 1.4 ? "default" : "pointer", fontSize: 13, padding: "2px 5px", borderRadius: 5, lineHeight: 1 }}>A+</button>
+          </div>
           {undoLabel && <Bt color="#f59e0b" onClick={doUndo}>{undoLabel}</Bt>}
           {selectedIds.size > 0 && (
             <Bt color="#ef4444" onClick={deleteSelected}>🗑 Eliminar ({selectedIds.size})</Bt>
@@ -983,7 +1043,7 @@ function TabAsesorias({ data, onRefresh }) {
       )}
 
       {/* Grid */}
-      <div style={{ overflowX: "auto", overflowY: "auto", maxHeight: "calc(100vh - 230px)", borderRadius: 12, border: "1px solid rgba(255,255,255,0.08)" }}>
+      <div style={{ overflowX: "auto", overflowY: "auto", maxHeight: `calc((100vh - 230px) / ${zoom})`, borderRadius: 12, border: "1px solid rgba(255,255,255,0.08)", zoom }}>
         <table style={{ borderCollapse: "collapse", fontSize: 12, tableLayout: "fixed", minWidth: GRID_COLS.reduce((a, c) => a + c.width, 0) + ACT_COL_W }}>
           <thead>
             <tr>
@@ -1028,7 +1088,7 @@ function TabAsesorias({ data, onRefresh }) {
             </tr>
           </thead>
           <tbody>
-            {pagedItems.map(({ row, rowsIdx }) => {
+            {pagedItems.flatMap(({ row, rowsIdx }, i) => {
               const isNew = row.id === null;
               const isSaving = saving.has(rowsIdx);
               const isHov = hoveredRow === rowsIdx;
@@ -1037,30 +1097,39 @@ function TabAsesorias({ data, onRefresh }) {
               const isSelected = !isNew && selectedIds.has(row.id);
               const selBg = isSelected ? "rgba(99,102,241,0.12)" : rowBg;
               const selFrozenBg = isSelected ? "#12183a" : frozenBg;
-              return (
+              const rowNum = rowNumMap[rowsIdx];
+
+              const rowEl = (
                 <tr key={row.id ?? `tmp-${row._k}`}
                   style={{ background: selBg, transition: "background .1s" }}
                   onMouseEnter={() => setHoveredRow(rowsIdx)}
                   onMouseLeave={() => setHoveredRow(null)}>
-                  {/* Select / saving — frozen */}
+                  {/* Action col — frozen */}
                   <td style={{ position: "sticky", left: 0, zIndex: 2, background: selFrozenBg, width: ACT_COL_W, padding: "4px 8px", borderBottom: "1px solid rgba(255,255,255,0.04)", textAlign: "center", transition: "background .1s" }}>
                     {isSaving ? (
                       <span style={{ display: "inline-block", width: 12, height: 12, border: "2px solid rgba(99,102,241,0.3)", borderTopColor: "#6366f1", borderRadius: "50%", animation: "spin 0.8s linear infinite" }} />
                     ) : !isNew ? (
-                      isSelected || isHov ? (
-                        <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 3 }}>
-                          <input type="checkbox" checked={isSelected}
-                            onChange={() => toggleSelect(row.id)}
+                      isSelected ? (
+                        <input type="checkbox" checked onChange={() => toggleSelect(row.id)}
+                          onClick={(e) => e.stopPropagation()}
+                          style={{ cursor: "pointer", accentColor: "#6366f1" }} />
+                      ) : isHov ? (
+                        <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 2 }}>
+                          <input type="checkbox" checked={false} onChange={() => toggleSelect(row.id)}
                             onClick={(e) => e.stopPropagation()}
                             style={{ cursor: "pointer", accentColor: "#6366f1" }} />
-                          {isHov && !isSelected && (
-                            <button onClick={() => deleteRow(rowsIdx)} title="Eliminar"
-                              style={{ background: "none", border: "none", color: "#6b6f82", cursor: "pointer", padding: 0, fontSize: 11, lineHeight: 1 }}
-                              onMouseEnter={(e) => e.target.style.color = "#ef4444"}
-                              onMouseLeave={(e) => e.target.style.color = "#6b6f82"}>✕</button>
-                          )}
+                          <button onClick={() => duplicateRow(rowsIdx)} title="Duplicar fila"
+                            style={{ background: "none", border: "none", color: "#6b6f82", cursor: "pointer", padding: "1px 2px", fontSize: 11, lineHeight: 1 }}
+                            onMouseEnter={(e) => e.currentTarget.style.color = "#a5b4fc"}
+                            onMouseLeave={(e) => e.currentTarget.style.color = "#6b6f82"}>⎘</button>
+                          <button onClick={() => deleteRow(rowsIdx)} title="Eliminar"
+                            style={{ background: "none", border: "none", color: "#6b6f82", cursor: "pointer", padding: "1px 2px", fontSize: 11, lineHeight: 1 }}
+                            onMouseEnter={(e) => e.currentTarget.style.color = "#ef4444"}
+                            onMouseLeave={(e) => e.currentTarget.style.color = "#6b6f82"}>✕</button>
                         </div>
-                      ) : null
+                      ) : (
+                        <span style={{ color: "#3a3f5a", fontSize: 10, fontVariantNumeric: "tabular-nums" }}>{rowNum}</span>
+                      )
                     ) : (
                       <button onClick={() => discardNewRow(rowsIdx)} title="Descartar fila"
                         style={{ background: "none", border: "none", color: "#4a5080", cursor: "pointer", padding: 4, fontSize: 14, lineHeight: 1, borderRadius: 4 }}
@@ -1130,6 +1199,12 @@ function TabAsesorias({ data, onRefresh }) {
                   })}
                 </tr>
               );
+
+              return [
+                ...(i === 0 ? [renderSep(`sep-pre-${rowsIdx}`, rowsIdx)] : []),
+                rowEl,
+                renderSep(`sep-post-${rowsIdx}`, rowsIdx + 1),
+              ];
             })}
           </tbody>
         </table>
