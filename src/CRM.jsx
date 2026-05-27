@@ -653,6 +653,7 @@ function TabAsesorias({ data, onRefresh }) {
   const [showPaste, setShowPaste] = useState(false);
   const [gridPage, setGridPage] = useState(0);
   const [hoveredRow, setHoveredRow] = useState(null);
+  const [insertCount, setInsertCount] = useState(5);
   const inputRef = useRef();
   const dSearch = useDebounce(search, 200);
 
@@ -678,11 +679,12 @@ function TabAsesorias({ data, onRefresh }) {
 
   const GRID_PAGE_SIZE = 150;
   const existingItems = filteredWithIdx.filter(({ row }) => row.id !== null);
-  const newItem = filteredWithIdx.find(({ row }) => row.id === null);
-  const totalGridPages = Math.ceil(existingItems.length / GRID_PAGE_SIZE);
+  const newItems = filteredWithIdx.filter(({ row }) => row.id === null);
+  const totalGridPages = Math.max(1, Math.ceil(existingItems.length / GRID_PAGE_SIZE));
+  const isLastGridPage = gridPage >= totalGridPages - 1;
   const pagedItems = [
     ...existingItems.slice(gridPage * GRID_PAGE_SIZE, (gridPage + 1) * GRID_PAGE_SIZE),
-    ...(newItem ? [newItem] : [emptyRow()].map((row) => ({ row, rowsIdx: rows.length - 1 }))),
+    ...(isLastGridPage ? newItems : []),
   ];
 
   const updateRowLocal = (rowIdx, key, value) => {
@@ -702,6 +704,18 @@ function TabAsesorias({ data, onRefresh }) {
     });
   };
 
+  const doInsertRows = (n) => {
+    const count = Math.max(1, Math.min(100, n));
+    const newRows = Array.from({ length: count }, emptyRow);
+    setRows((prev) => {
+      const lastIsEmpty = prev.length > 0 && prev[prev.length - 1].id === null;
+      return lastIsEmpty
+        ? [...prev.slice(0, -1), ...newRows, prev[prev.length - 1]]
+        : [...prev, ...newRows];
+    });
+    setGridPage(totalGridPages - 1);
+  };
+
   const saveRow = async (rowIdx) => {
     const row = rows[rowIdx];
     if (!row || saving.has(rowIdx)) return;
@@ -713,18 +727,19 @@ function TabAsesorias({ data, onRefresh }) {
     setSaving((s) => new Set(s).add(rowIdx));
     try {
       if (row.id) {
-        await supabase.from("asesorias").update(payload).eq("id", row.id);
+        const { error } = await supabase.from("asesorias").update(payload).eq("id", row.id);
+        if (!error) setRows((prev) => prev.map((r, i) => i === rowIdx ? { ...r, ...payload } : r));
       } else {
         const { data: inserted } = await supabase.from("asesorias").insert(payload).select().single();
         if (inserted) {
           setRows((prev) => {
             const next = [...prev];
             next[rowIdx] = inserted;
+            if (!next.some((r) => r.id === null)) next.push(emptyRow());
             return next;
           });
         }
       }
-      await onRefresh();
     } finally {
       setSaving((s) => { const n = new Set(s); n.delete(rowIdx); return n; });
     }
@@ -871,6 +886,14 @@ function TabAsesorias({ data, onRefresh }) {
         </select>
         <div style={{ marginLeft: "auto", display: "flex", gap: 8, alignItems: "center" }}>
           <span style={{ ...S.mono, fontSize: 11, color: "#6b6f82" }}>{data.length} registros</span>
+          <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+            <Bt color="#6366f1" onClick={() => doInsertRows(insertCount)}>+ Insertar</Bt>
+            <input type="number" min="1" max="100"
+              value={insertCount}
+              onChange={(e) => setInsertCount(Math.max(1, Math.min(100, parseInt(e.target.value) || 1)))}
+              style={{ ...S.input, width: 52, textAlign: "center", padding: "8px 4px" }} />
+            <span style={{ color: "#8e92a6", fontSize: 12, whiteSpace: "nowrap" }}>filas</span>
+          </div>
           <Bt color="#8b5cf6" onClick={() => setShowPaste(true)}>⌨ Pegar Excel</Bt>
           <label style={{ ...S.btn("#10b981"), cursor: "pointer", display: "inline-block" }}>
             {importing ? "Importando..." : "↑ Importar archivo"}
@@ -1011,6 +1034,16 @@ function TabAsesorias({ data, onRefresh }) {
                 </tr>
               );
             })}
+            <tr
+              onClick={() => doInsertRows(1)}
+              style={{ cursor: "pointer", background: "transparent", transition: "background .1s" }}
+              onMouseEnter={(e) => e.currentTarget.style.background = "rgba(99,102,241,0.06)"}
+              onMouseLeave={(e) => e.currentTarget.style.background = "transparent"}
+              title="Agregar una fila">
+              <td colSpan={GRID_COLS.length + 1} style={{ padding: "8px 16px", textAlign: "center", color: "#4a5080", fontSize: 13, borderTop: "1px solid rgba(255,255,255,0.06)" }}>
+                + agregar fila
+              </td>
+            </tr>
           </tbody>
         </table>
       </div>
