@@ -81,6 +81,9 @@ function isCAGS(r) {
 function isDIC25(r) {
   return norm(r.exatec || "").includes("diciembre") || norm(r.exatec || "").includes("dic");
 }
+function isAsist(r) {
+  return r.estatus === "Asistencia" || r.estatus === "Express";
+}
 
 /* ═══ PASTE / CLIPBOARD ═══ */
 const HEADER_MAP = {
@@ -266,7 +269,7 @@ function Modal({ onClose, children }) {
 function StudentModal({ matricula, records, onClose }) {
   const sorted = [...records].sort((a, b) => (b.dia || "") > (a.dia || "") ? 1 : -1);
   const latest = sorted[0] || {};
-  const asist = records.filter((r) => r.estatus === "Asistencia").length;
+  const asist = records.filter(isAsist).length;
   const services = [...new Set(records.map((r) => r.servicio).filter(Boolean))];
   const cags = isCAGS(latest);
   const dic25 = isDIC25(latest);
@@ -358,7 +361,7 @@ function TabHome({ data, onStatusChange }) {
 
   const stats = useMemo(() => ({
     total: allHoy.length,
-    asistencia: allHoy.filter((r) => r.estatus === "Asistencia").length,
+    asistencia: allHoy.filter(isAsist).length,
     falta: allHoy.filter((r) => r.estatus === "Falta").length,
     cancelacion: allHoy.filter((r) => r.estatus === "Cancelación").length,
     express: allHoy.filter((r) => r.estatus === "Express").length,
@@ -1654,12 +1657,12 @@ function parseExcelDate(v) {
 /* ═══ TAB DASHBOARD ═══ */
 function TabDashboard({ data }) {
   const total = data.length;
-  const asist = data.filter((r) => r.estatus === "Asistencia").length;
+  const asist = data.filter(isAsist).length;
   const faltas = data.filter((r) => r.estatus === "Falta").length;
   const express = data.filter((r) => r.estatus === "Express").length;
   const cancel = data.filter((r) => r.estatus === "Cancelación").length;
   const uniq = new Set(data.map((r) => r.matricula)).size;
-  const base = total - express;
+  const base = total;
 
   const cagsUniq = useMemo(() => new Set(data.filter(isCAGS).map((r) => r.matricula)).size, [data]);
   const dic25Uniq = useMemo(() => new Set(data.filter(isDIC25).map((r) => r.matricula)).size, [data]);
@@ -1789,7 +1792,7 @@ function AsesorModal({ asesor, records, onClose }) {
   const [aSearch, setASearch] = useState("");
   const dASearch = useDebounce(aSearch, 200);
 
-  const asist = records.filter((r) => r.estatus === "Asistencia").length;
+  const asist = records.filter(isAsist).length;
   const faltas = records.filter((r) => r.estatus === "Falta").length;
   const express = records.filter((r) => r.estatus === "Express").length;
   const base = records.length - express;
@@ -1801,7 +1804,7 @@ function AsesorModal({ asesor, records, onClose }) {
       const s = m[r.matricula];
       s.sesiones++;
       s.records.push(r);
-      if (r.estatus === "Asistencia") s.asistencias++;
+      if (isAsist(r)) s.asistencias++;
     });
     return Object.values(m).sort((a, b) => b.sesiones - a.sesiones);
   }, [records]);
@@ -1876,10 +1879,11 @@ function TabAsesores({ data }) {
       {selected && <AsesorModal asesor={selected} records={data.filter((r) => r.atiende === selected)} onClose={() => setSelected(null)} />}
       <div style={S.grid(2)}>
         {byAsesor.map(([name, recs], idx) => {
-          const a = recs.filter((r) => r.estatus === "Asistencia").length;
+          const a = recs.filter(isAsist).length;
+          const aOnly = recs.filter((r) => r.estatus === "Asistencia").length;
           const ex = recs.filter((r) => r.estatus === "Express").length;
           const f = recs.filter((r) => r.estatus === "Falta").length;
-          const b = recs.length - ex;
+          const b = recs.length;
           const color = CHART_COLORS[idx % CHART_COLORS.length];
           const cagsCount = new Set(recs.filter(isCAGS).map((r) => r.matricula)).size;
           const dic25Count = new Set(recs.filter(isDIC25).map((r) => r.matricula)).size;
@@ -1898,7 +1902,7 @@ function TabAsesores({ data }) {
                 {dic25Count > 0 && <span style={S.badge("#22d3ee")}>DIC25: {dic25Count}</span>}
               </div>
               <div style={{ display: "flex", height: 6, borderRadius: 3, overflow: "hidden", gap: 2 }}>
-                {a > 0 && <div style={{ flex: a, background: "#10b981", borderRadius: 3 }} />}
+                {aOnly > 0 && <div style={{ flex: aOnly, background: "#10b981", borderRadius: 3 }} />}
                 {f > 0 && <div style={{ flex: f, background: "#ef4444", borderRadius: 3 }} />}
                 {ex > 0 && <div style={{ flex: ex, background: "#f59e0b", borderRadius: 3 }} />}
               </div>
@@ -2034,7 +2038,7 @@ function TabAlumnos({ data }) {
         nombre: sorted.find((r) => r.nombre)?.nombre || "—",
         ap: sorted.find((r) => r.ap)?.ap || "",
         sesiones: s.records.length,
-        asistencias: s.records.filter((r) => r.estatus === "Asistencia").length,
+        asistencias: s.records.filter(isAsist).length,
         ultimoAsesor: latest.atiende || "—",
         ultimoServicio: latest.servicio || "—",
         escuela: latest.escuela || "—",
