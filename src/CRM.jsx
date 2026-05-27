@@ -1239,28 +1239,54 @@ function TabAsesorias({ data, onRefresh }) {
       </div>
 
       {/* Paginación */}
-      <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "12px 4px" }}>
-        {totalGridPages > 1 && <>
-          <Bt color="#6366f1" onClick={() => setGridPage((p) => Math.max(0, p - 1))}
-            style={{ padding: "4px 14px", fontSize: 12, opacity: gridPage === 0 ? 0.3 : 1, pointerEvents: gridPage === 0 ? "none" : "auto" }}>← Ant</Bt>
-          <span style={{ ...S.mono, fontSize: 12, color: "#8e92a6" }}>
-            Página {gridPage + 1} de {totalGridPages} · {existingItems.length} registros
-          </span>
-          <Bt color="#6366f1" onClick={() => setGridPage((p) => Math.min(totalGridPages - 1, p + 1))}
-            style={{ padding: "4px 14px", fontSize: 12, opacity: isLastGridPage ? 0.3 : 1, pointerEvents: isLastGridPage ? "none" : "auto" }}>Sig →</Bt>
-        </>}
-        <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 6 }}>
-          <span style={{ fontSize: 12, color: "#6b6f82" }}>Filas por página:</span>
-          {[25, 50, 100, 150].map((n) => (
-            <button key={n} onClick={() => { setPageSize(n); setGridPage(0); }}
-              style={{ padding: "4px 10px", fontSize: 12, borderRadius: 6, border: "none", cursor: "pointer",
-                background: pageSize === n ? "#6366f1" : "rgba(255,255,255,0.06)",
-                color: pageSize === n ? "#fff" : "#8e92a6", fontWeight: pageSize === n ? 600 : 400 }}>
-              {n}
-            </button>
-          ))}
-        </div>
-      </div>
+      {(() => {
+        const cur1 = gridPage + 1; // 1-based
+        // Build page items with ellipsis
+        const pageItems = (() => {
+          if (totalGridPages <= 9) return Array.from({ length: totalGridPages }, (_, i) => ({ t: "p", n: i + 1 }));
+          const vis = new Set([1, totalGridPages]);
+          for (let p = cur1 - 2; p <= cur1 + 2; p++) { if (p >= 1 && p <= totalGridPages) vis.add(p); }
+          const sorted = [...vis].sort((a, b) => a - b);
+          const items = [];
+          sorted.forEach((pg, i) => {
+            if (i > 0 && pg - sorted[i - 1] > 1) items.push({ t: "e", k: `e${pg}` });
+            items.push({ t: "p", n: pg });
+          });
+          return items;
+        })();
+        const btnStyle = (active) => ({
+          padding: "4px 9px", fontSize: 12, borderRadius: 6, border: "none", cursor: "pointer",
+          minWidth: 30, fontWeight: active ? 700 : 400,
+          background: active ? "#6366f1" : "rgba(255,255,255,0.06)",
+          color: active ? "#fff" : "#8e92a6",
+        });
+        return (
+          <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "12px 4px", flexWrap: "wrap" }}>
+            {/* Prev */}
+            <button onClick={() => setGridPage(p => Math.max(0, p - 1))} disabled={gridPage === 0}
+              style={{ ...btnStyle(false), opacity: gridPage === 0 ? 0.3 : 1, padding: "4px 12px" }}>←</button>
+            {/* Page numbers */}
+            {pageItems.map(item =>
+              item.t === "e"
+                ? <span key={item.k} style={{ color: "#6b6f82", fontSize: 13, padding: "0 2px" }}>…</span>
+                : <button key={item.n} onClick={() => setGridPage(item.n - 1)} style={btnStyle(item.n === cur1)}>{item.n}</button>
+            )}
+            {/* Next */}
+            <button onClick={() => setGridPage(p => Math.min(totalGridPages - 1, p + 1))} disabled={isLastGridPage}
+              style={{ ...btnStyle(false), opacity: isLastGridPage ? 0.3 : 1, padding: "4px 12px" }}>→</button>
+            {/* Info + page size */}
+            <span style={{ ...S.mono, fontSize: 11, color: "#6b6f82", marginLeft: 8 }}>
+              {existingItems.length} registros
+            </span>
+            <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 6 }}>
+              <span style={{ fontSize: 12, color: "#6b6f82" }}>Filas por página:</span>
+              {[25, 50, 100, 150].map((n) => (
+                <button key={n} onClick={() => { setPageSize(n); setGridPage(0); }} style={btnStyle(pageSize === n)}>{n}</button>
+              ))}
+            </div>
+          </div>
+        );
+      })()}
 
       <div style={{ marginTop: 8, color: "#6b6f82", fontSize: 11 }}>
         Clic en celda para editar · Tab / Enter para avanzar · se guarda automáticamente al salir
@@ -1717,12 +1743,22 @@ export default function CRM() {
   const [tab, setTab] = useState("home");
 
   const fetchData = useCallback(async () => {
-    const { data: rows, error } = await supabase
-      .from("asesorias")
-      .select("*")
-      .order("dia", { ascending: false })
-      .order("hora", { ascending: true });
-    if (!error) setData(rows || []);
+    const BATCH = 1000;
+    let all = [];
+    let from = 0;
+    while (true) {
+      const { data: rows, error } = await supabase
+        .from("asesorias")
+        .select("*")
+        .order("dia", { ascending: false })
+        .order("hora", { ascending: true })
+        .range(from, from + BATCH - 1);
+      if (error || !rows?.length) break;
+      all = [...all, ...rows];
+      if (rows.length < BATCH) break;
+      from += BATCH;
+    }
+    setData(all);
     setLoading(false);
   }, []);
 
